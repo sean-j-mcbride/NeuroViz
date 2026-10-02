@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { serialiseModelFile } from '../state/modelFile';
 import { PRESETS, type PresetId } from '../state/presets';
-import { encodeConfig } from '../state/shareUrl';
+import { encodeLink } from '../state/shareUrl';
 import { DEFAULT_CONFIG, sameConfig, useAppStore } from '../state/store';
 import type { Checkpoint } from '../worker';
 import { downloadText, errorText, readModelFile } from './files';
@@ -15,6 +15,8 @@ interface ProjectBarProps {
 /** Presets, saving and loading models, and share links. */
 export function ProjectBar({ requestCheckpoint }: ProjectBarProps) {
   const config = useAppStore((s) => s.config);
+  const speed = useAppStore((s) => s.speed);
+  const showTestData = useAppStore((s) => s.showTestData);
   const presetId = useAppStore((s) => s.presetId);
   const { loadPreset, setConfig, loadModel, setNotice } = useAppStore.getState();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -65,7 +67,7 @@ export function ProjectBar({ requestCheckpoint }: ProjectBarProps) {
   };
 
   const copyLink = async () => {
-    const url = `${location.origin}${location.pathname}${location.search}${encodeConfig(config)}`;
+    const url = `${location.origin}${location.pathname}${location.search}${encodeLink(config, { speed, showTestData })}`;
     try {
       await navigator.clipboard.writeText(url);
       setNotice({ kind: 'info', text: 'Link copied. It sets up this run from scratch.' });

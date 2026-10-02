@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG, type PlaygroundConfig } from './config';
-import { decodeConfig, encodeConfig } from './shareUrl';
+import { type LinkView, decodeLink, encodeLink } from './shareUrl';
 
 const custom: PlaygroundConfig = {
   dataset: { kind: 'gaussians', n: 150, noise: 0.45, seed: 123456789 },
@@ -15,11 +15,13 @@ const custom: PlaygroundConfig = {
   seed: 42,
 };
 
+const VIEW: LinkView = { speed: 300, showTestData: false };
+
 describe('share links', () => {
   it('encodes the default config as a readable hash', () => {
-    expect(encodeConfig(DEFAULT_CONFIG)).toBe(
+    expect(encodeLink(DEFAULT_CONFIG, VIEW)).toBe(
       '#data=spirals&points=400&noise=0&dataSeed=1&layers=8tanh,8tanh' +
-        '&lr=0.03&batch=10&optimiser=sgd&l2=0&dropout=0&seed=1',
+        '&lr=0.03&batch=10&optimiser=sgd&l2=0&dropout=0&seed=1&speed=300&showTest=0',
     );
   });
 
@@ -28,27 +30,50 @@ describe('share links', () => {
     ['a custom config', custom],
     ['no hidden layers', { ...custom, network: { hidden: [] } }],
   ])('round-trips %s exactly', (_, config) => {
-    expect(decodeConfig(encodeConfig(config))).toEqual({ config, warnings: [] });
+    expect(decodeLink(encodeLink(config, VIEW))).toEqual({ config, warnings: [], view: VIEW });
   });
 
   it('survives the browser percent-encoding the commas', () => {
-    const hash = encodeConfig(custom).replaceAll(',', '%2C');
-    expect(decodeConfig(hash)?.config).toEqual(custom);
+    const hash = encodeLink(custom, VIEW).replaceAll(',', '%2C');
+    expect(decodeLink(hash)?.config).toEqual(custom);
   });
 
   it('fills missing values from the defaults', () => {
-    expect(decodeConfig('#lr=1&layers=2relu')).toEqual({
+    expect(decodeLink('#lr=1&layers=2relu')).toEqual({
       config: {
         ...DEFAULT_CONFIG,
         network: { hidden: [{ units: 2, activation: 'relu' }] },
         training: { ...DEFAULT_CONFIG.training, lr: 1 },
       },
       warnings: [],
+      view: {},
+    });
+  });
+
+  it.each([[{ speed: 'max', showTestData: true }], [{ speed: 30, showTestData: false }]] as [
+    LinkView,
+  ][])('round-trips the view %o', (view) => {
+    expect(decodeLink(encodeLink(DEFAULT_CONFIG, view))?.view).toEqual(view);
+  });
+
+  it('a link with only view keys still counts, and bad view values are reported', () => {
+    expect(decodeLink('#speed=max')).toEqual({
+      config: DEFAULT_CONFIG,
+      warnings: [],
+      view: { speed: 'max' },
+    });
+    expect(decodeLink('#speed=fast&showTest=yes')).toEqual({
+      config: DEFAULT_CONFIG,
+      warnings: [
+        'Ignored speed “fast” (choices: 30, 100, 300, 1000, max); left unchanged',
+        'Ignored showTest “yes” (choices: 0, 1); left unchanged',
+      ],
+      view: {},
     });
   });
 
   it('ignores garbage values with warnings and leaves unrelated hashes alone', () => {
-    const r = decodeConfig('#data=moons&points=lots&layers=8tanh,xx&lr=&batch=0&seed=1e99');
+    const r = decodeLink('#data=moons&points=lots&layers=8tanh,xx&lr=&batch=0&seed=1e99');
     expect(r?.config).toEqual(DEFAULT_CONFIG);
     expect(r?.warnings).toEqual([
       'Ignored dataset “moons” (choices: circle, xor, spirals, gaussians); using “spirals”',
@@ -59,7 +84,7 @@ describe('share links', () => {
       'Ignored batch size 0 (choices: 1, 5, 10, 25, 50, full); using 10',
       'Ignored weight seed 1e+99 (a whole number from 0 to 4294967295); using 1',
     ]);
-    expect(decodeConfig('')).toBeNull();
-    expect(decodeConfig('#section-2')).toBeNull();
+    expect(decodeLink('')).toBeNull();
+    expect(decodeLink('#section-2')).toBeNull();
   });
 });

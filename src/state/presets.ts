@@ -1,5 +1,5 @@
 import type { HiddenLayerSpec } from '../worker';
-import { DEFAULT_CONFIG, type PlaygroundConfig } from './config';
+import { DEFAULT_CONFIG, type PlaygroundConfig, sameConfig } from './config';
 
 export type PresetId = 'underfitting' | 'overfitting' | 'dead-relus' | 'too-high-lr';
 
@@ -111,4 +111,9 @@ export const PRESETS: readonly Preset[] = [
 
 export function findPreset(id: string): Preset | undefined {
   return PRESETS.find((p) => p.id === id);
+}
+
+/** The preset whose set-up (or fix) `config` is exactly, if any. */
+export function presetFor(config: PlaygroundConfig): Preset | undefined {
+  return PRESETS.find((p) => sameConfig(config, p.config) || sameConfig(config, p.fix));
 }
