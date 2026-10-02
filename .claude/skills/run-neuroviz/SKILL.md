@@ -6,17 +6,25 @@ description: Build, run, and drive the NeuroViz neural-network visualiser. Use w
 NeuroViz is a static Vite + React app; training runs in a Web Worker. To drive it, start the dev
 server (or the static preview), then pipe a command script to
 `.claude/skills/run-neuroviz/driver.mjs`. That is a Playwright driver running headless **system
-Google Chrome**. All paths below are relative to the repo root.
+Google Chrome**, or Playwright's **bundled Chromium** when Chrome is missing or you ask for it.
+All paths below are relative to the repo root.
 
-Verified on macOS (Darwin, Node ≥ 20) with Google Chrome installed. It was not tried on Linux.
-There, `channel: 'chrome'` needs Chrome installed, or switch the driver to Playwright's bundled
-Chromium.
+Verified on macOS (Darwin, Apple silicon, Node ≥ 20) with both Chrome 154 and bundled Chromium 153;
+both give the same results. It was not tried on Linux (no container runtime on the machine it was
+written on).
 
 ## Setup
 
 ```bash
 npm install                                         # app deps
 npm --prefix .claude/skills/run-neuroviz install    # driver's only dep: playwright-core
+```
+
+Only if Google Chrome isn't installed (or you want `--browser chromium`): download Playwright's
+headless Chromium, ~94 MB, into `~/Library/Caches/ms-playwright` on macOS:
+
+```bash
+npx --prefix .claude/skills/run-neuroviz playwright-core install chromium
 ```
 
 ## Run (agent path)
@@ -55,9 +63,11 @@ Expected: `workers` lists `training.worker.ts?worker_file&type=module`. `measure
 300 epochs/s, ~12 snapshots/s and 60 fps. `hover` prints the edge's tooltip (weight, ∂L/∂w,
 sparkline range). `errors` is `[]`. **Open the screenshots and look at them.**
 
-Arguments: `driver.mjs [url] [--dark] [--out DIR]`. The URL defaults to `http://localhost:5173`.
-Screenshots go to `$TMPDIR/neuroviz-shots/<name>.png` unless you pass `--out`, and every `shot`
-prints its absolute path.
+Arguments: `driver.mjs [url] [--dark] [--out DIR] [--browser chrome|chromium]`. The URL defaults
+to `http://localhost:5173`. Screenshots go to `$TMPDIR/neuroviz-shots/<name>.png` unless you pass
+`--out`, and every `shot` prints its absolute path. `--browser chrome` (the default) falls back to
+bundled Chromium if Chrome won't launch; `--browser chromium` forces it. The first stderr line
+says which one ran, e.g. `browser: chrome 154.0.8037.95`.
 
 | command                    | what it does                                                                             |
 | -------------------------- | ---------------------------------------------------------------------------------------- |
@@ -160,6 +170,11 @@ All of these must pass at the end of each phase (CLAUDE.md).
 
 ## Troubleshooting
 
+- **`Chrome failed to launch (… is not found at …); trying bundled Chromium.`**: Chrome isn't
+  installed where Playwright looks. Harmless if the bundled Chromium is installed; the run
+  continues on it.
+- **`Bundled Chromium failed to launch (… Executable doesn't exist at …)`**: run the
+  `playwright-core install chromium` command from Setup.
 - **`Nothing is serving http://localhost:5173 (Error: page.goto: net::ERR_CONNECTION_REFUSED …)`**: the
   dev server isn't running (or you meant the preview on 4173). Start it with the block above.
 - **`(eval):1: command not found: timeout`**: macOS has no `timeout`. Use the

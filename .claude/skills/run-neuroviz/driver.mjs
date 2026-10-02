@@ -1,7 +1,10 @@
 // Headless-Chrome driver for NeuroViz. Reads one command per line from stdin.
 //
-//   node .claude/skills/run-neuroviz/driver.mjs [url] [--dark] [--out DIR] < script
+//   node .claude/skills/run-neuroviz/driver.mjs [url] [--dark] [--out DIR] [--browser chrome|chromium] < script
 //
+// --browser chrome (default) uses the installed Google Chrome and falls back to
+// Playwright's bundled Chromium if Chrome can't launch; --browser chromium forces
+// the bundled one (install: npx --prefix .claude/skills/run-neuroviz playwright-core install chromium).
 // url defaults to http://localhost:5173 (the dev server). Screenshots go to
 // --out (default $TMPDIR/neuroviz-shots). Results are printed as JSON lines.
 // Blank lines and lines starting with # are ignored. See SKILL.md for commands.
@@ -20,10 +23,36 @@ const flag = (name) => {
 };
 const dark = args.includes('--dark') && args.splice(args.indexOf('--dark'), 1);
 const out = flag('--out') ?? join(tmpdir(), 'neuroviz-shots');
+const browserKind = flag('--browser') ?? 'chrome';
 const url = args[0] ?? 'http://localhost:5173';
 mkdirSync(out, { recursive: true });
 
-const browser = await chromium.launch({ channel: 'chrome', headless: true });
+async function launch() {
+  if (browserKind === 'chrome') {
+    try {
+      return ['chrome', await chromium.launch({ channel: 'chrome', headless: true })];
+    } catch (e) {
+      console.error(
+        `Chrome failed to launch (${String(e).split('\n')[0]}); trying bundled Chromium.`,
+      );
+    }
+  } else if (browserKind !== 'chromium') {
+    console.error(`--browser must be chrome or chromium, got ${browserKind}`);
+    process.exit(1);
+  }
+  try {
+    return ['chromium', await chromium.launch({ headless: true })];
+  } catch (e) {
+    console.error(
+      `Bundled Chromium failed to launch (${String(e).split('\n')[0]}). Install it with: ` +
+        'npx --prefix .claude/skills/run-neuroviz playwright-core install chromium',
+    );
+    process.exit(1);
+  }
+}
+const [launched, browser] = await launch();
+// Stderr, so stdout stays one JSON result per command.
+console.error(`browser: ${launched} ${browser.version()}`);
 const ctx = await browser.newContext({
   viewport: { width: 1400, height: 1000 },
   colorScheme: dark ? 'dark' : 'light',
