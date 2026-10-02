@@ -253,6 +253,10 @@ export class TrainingSession {
       rng: { shuffle: this.shuffleRng.getState(), dropout: this.initRng.getState() },
       order: this.order.slice(),
       hyperparamLog: this.hyperparamLogCopy(),
+      observations: {
+        timeline: this.timeline.exportState(),
+        params: this.paramHistory.exportState(),
+      },
     };
   }
 
@@ -266,7 +270,8 @@ export class TrainingSession {
   /**
    * Picks up from a checkpoint. Optimiser state is restored only when it is
    * for the configured optimiser (otherwise that optimiser starts fresh, as
-   * when switching mid-run). Histograms and sparklines restart from here. The
+   * when switching mid-run). The charts' history continues if the checkpoint
+   * has it, or restarts at the checkpoint's epoch if not. The
    * settings log continues; if the configured settings differ from the last
    * ones logged, the change is logged at the checkpoint's epoch.
    */
@@ -311,7 +316,12 @@ export class TrainingSession {
     this.logHyperparams(configured);
     this.trainAccuracy = this.evaluate(this.train).accuracy;
     this.testAccuracy = this.evaluate(this.test).accuracy;
-    this.observe();
+    if (c.observations) {
+      this.timeline.importState(c.observations.timeline);
+      this.paramHistory.importState(c.observations.params);
+    } else {
+      this.observe();
+    }
   }
 
   private resolveBatchSize(b: Hyperparams['batchSize']): number {

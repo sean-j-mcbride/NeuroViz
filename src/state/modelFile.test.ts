@@ -59,7 +59,9 @@ describe('model files', () => {
     const text = serialiseModelFile(CONFIG, trained(CONFIG, 1).checkpoint(), SAVED_AT);
     expect(text).toMatch(/^\{\n {2}"format": "neuroviz-model",\n {2}"version": 2,/);
     expect(text).toMatch(/\n {6}"0\.W": \[-?\d[^\n]*\],?\n/);
-    expect(text.split('\n').length).toBeLessThan(100);
+    expect(text.split('\n').length).toBeLessThan(150);
+    // The charts' history is one labelled, compact block.
+    expect(text).toMatch(/\n {4}"history": \{\n {6}"note": "Display only/);
   });
 
   it('keeps non-finite losses from a diverged run', () => {
@@ -108,6 +110,30 @@ describe('model files', () => {
         /checkpoint.params\["0.W"\]\[3\] is not a number/,
       ],
       [
+        'corrupt chart history',
+        (() => {
+          const d = good();
+          const layers = (
+            d.checkpoint!.history as { timeline: { layers: Record<string, unknown>[] } }
+          ).timeline.layers;
+          layers[0]!.weightRms = '%%%';
+          return d;
+        })(),
+        /history\.timeline\.layers\[0\]\.weightRms is not valid/,
+      ],
+      [
+        'a histogram count above the layer size',
+        (() => {
+          const d = good();
+          const layers = (
+            d.checkpoint!.history as { timeline: { layers: Record<string, unknown>[] } }
+          ).timeline.layers;
+          layers[0]!.size = 1;
+          return d;
+        })(),
+        /weightCounts has a count above the layer size/,
+      ],
+      [
         'weights for another network',
         {
           ...good(),
@@ -150,5 +176,6 @@ describe('model files', () => {
     const { checkpoint } = parseModelFile(JSON.stringify(doc));
     expect(checkpoint.epoch).toBe(2);
     expect(checkpoint.hyperparamLog).toEqual([{ epoch: 0, hyperparams: CONFIG.training }]);
+    expect(checkpoint.observations).toBeNull();
   });
 });

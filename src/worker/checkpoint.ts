@@ -1,4 +1,5 @@
 import type { OptimiserState, ParamValues, RngState } from '../engine';
+import type { ParamHistoryState, TimelineState } from './history';
 import type { HyperparamChange } from './session';
 
 /**
@@ -31,6 +32,12 @@ export interface Checkpoint {
   order: Uint32Array;
   /** The settings used over the run so far: epoch 0's, then each change. */
   hyperparamLog: HyperparamChange[];
+  /**
+   * The charts' history (histogram timeline and hover sparklines), so they
+   * continue after a resume. Display only; null when unknown (older files),
+   * and they then restart at the checkpoint's epoch.
+   */
+  observations: { timeline: TimelineState; params: ParamHistoryState } | null;
 }
 
 /** Every typed-array buffer in a checkpoint, for a zero-copy `postMessage` transfer list. */
@@ -42,5 +49,10 @@ export function checkpointBuffers(c: Checkpoint): ArrayBuffer[] {
     ...Object.values(c.params),
     ...Object.values(c.optimiser.slots).flat(),
   ];
+  if (c.observations) {
+    const { timeline, params } = c.observations;
+    arrays.push(timeline.epochs, params.epochs, params.ring);
+    for (const l of timeline.layers) arrays.push(l.weightHist, l.gradHist, l.weightRms, l.gradRms);
+  }
   return [...new Set(arrays.map((a) => a.buffer as ArrayBuffer))];
 }

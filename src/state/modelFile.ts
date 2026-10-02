@@ -1,5 +1,19 @@
 import type { OptimiserKind, OptimiserState, RngState } from '../engine';
-import { type Checkpoint, type HyperparamChange, TrainingSession } from '../worker';
+import {
+  type Checkpoint,
+  type HyperparamChange,
+  type ParamHistoryState,
+  type TimelineState,
+  TrainingSession,
+} from '../worker';
+import {
+  type UintWidth,
+  base64ToFloat32,
+  base64ToUints,
+  float32ToBase64,
+  uintWidthFor,
+  uintsToBase64,
+} from './base64';
 import { DEFAULT_CONFIG, type PlaygroundConfig, toSessionConfig } from './config';
 import { parseConfig } from './validate';
 
@@ -9,12 +23,17 @@ import { parseConfig } from './validate';
  * float32, so a save → load round-trip is exact and the file stays legible.
  * Non-finite values (a diverged loss) are written as the strings "NaN",
  * "Infinity" and "-Infinity".
+ *
+ * The exception is `checkpoint.history`: the charts' history (histogram
+ * timeline and hover sparklines), which is display-only and bulky, so it is
+ * stored compactly as base64 (histograms as whole counts).
  */
 
 export const MODEL_FILE_FORMAT = 'neuroviz-model';
 /**
- * 2 added the settings log (`checkpoint.hyperparamLog`). Version 1 files still
- * load, as if the settings never changed during the run.
+ * 2 added the settings log (`checkpoint.hyperparamLog`) and the charts'
+ * history (`checkpoint.history`). Version 1 files still load, as if the
+ * settings never changed during the run, and their charts restart.
  */
 export const MODEL_FILE_VERSION = 2;
 
@@ -49,6 +68,49 @@ const formatArray = (a: Float32Array | Uint32Array): string =>
 const mapValues = <A, B>(o: Record<string, A>, f: (a: A, key: string) => B): Record<string, B> =>
   Object.fromEntries(Object.entries(o).map(([k, v]) => [k, f(v, k)]));
 
+const HISTORY_NOTE =
+  'Display only: the histogram timeline and hover sparklines, so the charts carry on after ' +
+  'loading. Histograms are whole counts per bin (count / size is the share); all binary ' +
+  'values are little-endian base64.';
+
+/** Each histogram bin as a whole count, written at the narrowest width that holds `size`. */
+function encodeCounts(hist: Float32Array, size: number, width: UintWidth): string {
+  return uintsToBase64(
+    Array.from(hist, (f) => Math.round(f * size)),
+    width,
+  );
+}
+
+function historyBlock(
+  { timeline, params }: NonNullable<Checkpoint['observations']>,
+  raw: (a: Float32Array) => string,
+) {
+  return {
+    note: HISTORY_NOTE,
+    timeline: {
+      interval: timeline.interval,
+      epochs: raw(timeline.epochs),
+      layers: timeline.layers.map((l) => {
+        const bytes = uintWidthFor(l.size);
+        return {
+          size: l.size,
+          bytes,
+          weightCounts: encodeCounts(l.weightHist, l.size, bytes),
+          gradCounts: encodeCounts(l.gradHist, l.size, bytes),
+          weightRms: float32ToBase64(l.weightRms),
+          gradRms: float32ToBase64(l.gradRms),
+        };
+      }),
+    },
+    params: {
+      head: params.head,
+      length: params.length,
+      epochs: raw(params.epochs),
+      values: float32ToBase64(params.ring),
+    },
+  };
+}
+
 export function serialiseModelFile(
   config: PlaygroundConfig,
   c: Checkpoint,
@@ -77,6 +139,7 @@ export function serialiseModelFile(
       rng: c.rng,
       order: raw(c.order),
       hyperparamLog: c.hyperparamLog.map(oneLine),
+      history: c.observations && historyBlock(c.observations, raw),
     },
   };
   return `${JSON.stringify(doc, null, 2).replace(/"@@(\d+)@@"/g, (_, i: string) => arrays[Number(i)]!)}\n`;
@@ -160,6 +223,74 @@ function hyperparamChange(v: unknown, path: string): HyperparamChange {
   return { epoch: int(e.epoch, `${path}.epoch`), hyperparams: config.training };
 }
 
+function decoded<T>(decode: () => T, path: string): T {
+  try {
+    return decode();
+  } catch (e) {
+    return fail(`${path} is not valid: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
+function str(v: unknown, path: string): string {
+  return typeof v === 'string' ? v : fail(`${path} must be text`);
+}
+
+/** Shares from whole counts, as `histogramInto` computes them. */
+function sharesFrom(counts: Uint32Array, size: number, path: string): Float32Array {
+  const out = new Float32Array(counts.length);
+  counts.forEach((c, i) => {
+    if (c > size) fail(`${path} has a count above the layer size`);
+    out[i] = c / size;
+  });
+  return out;
+}
+
+function history(v: unknown): Checkpoint['observations'] {
+  if (v === null) return null;
+  const h = record(v, 'checkpoint.history');
+  const t = record(h.timeline, 'checkpoint.history.timeline');
+  if (!Array.isArray(t.layers)) fail('checkpoint.history.timeline.layers must be a list');
+  const timeline: TimelineState = {
+    interval: int(t.interval, 'checkpoint.history.timeline.interval'),
+    epochs: floats(t.epochs, 'checkpoint.history.timeline.epochs'),
+    layers: (t.layers as unknown[]).map((raw, k) => {
+      const path = `checkpoint.history.timeline.layers[${k}]`;
+      const l = record(raw, path);
+      const size = int(l.size, `${path}.size`);
+      const bytes =
+        l.bytes === 1 || l.bytes === 2 || l.bytes === 4
+          ? l.bytes
+          : fail(`${path}.bytes must be 1, 2 or 4`);
+      const counts = (key: string) =>
+        sharesFrom(
+          decoded(() => base64ToUints(str(l[key], `${path}.${key}`), bytes), `${path}.${key}`),
+          size,
+          `${path}.${key}`,
+        );
+      const f32 = (key: string) =>
+        decoded(() => base64ToFloat32(str(l[key], `${path}.${key}`)), `${path}.${key}`);
+      return {
+        size,
+        weightHist: counts('weightCounts'),
+        gradHist: counts('gradCounts'),
+        weightRms: f32('weightRms'),
+        gradRms: f32('gradRms'),
+      };
+    }),
+  };
+  const p = record(h.params, 'checkpoint.history.params');
+  const params: ParamHistoryState = {
+    head: int(p.head, 'checkpoint.history.params.head'),
+    length: int(p.length, 'checkpoint.history.params.length'),
+    epochs: floats(p.epochs, 'checkpoint.history.params.epochs'),
+    ring: decoded(
+      () => base64ToFloat32(str(p.values, 'checkpoint.history.params.values')),
+      'checkpoint.history.params.values',
+    ),
+  };
+  return { timeline, params };
+}
+
 function checkpoint(v: unknown, version: number, config: PlaygroundConfig): Checkpoint {
   const c = record(v, 'checkpoint');
   const log = c.hyperparamLog;
@@ -182,6 +313,7 @@ function checkpoint(v: unknown, version: number, config: PlaygroundConfig): Chec
       version >= 2
         ? (log as unknown[]).map((e, i) => hyperparamChange(e, `checkpoint.hyperparamLog[${i}]`))
         : [{ epoch: 0, hyperparams: config.training }],
+    observations: version >= 2 ? history(c.history) : null,
   };
 }
 

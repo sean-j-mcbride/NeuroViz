@@ -178,8 +178,8 @@ describe('TrainingController', () => {
     if (message.type !== 'checkpoint')
       throw new Error(`expected a checkpoint, got ${message.type}`);
     expect([message.sessionId, message.requestId, message.checkpoint.epoch]).toEqual([1, 9, 3]);
-    // Losses, order, 4 params and 2 Adam slots per param.
-    expect(transfer).toHaveLength(3 + 4 + 8);
+    // Losses, order, 4 params, 2 Adam slots per param; chart history: 3 arrays + 4 per layer.
+    expect(transfer).toHaveLength(3 + 4 + 8 + 3 + 2 * 4);
 
     const checkpoint = structuredClone(message.checkpoint);
     send({

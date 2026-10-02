@@ -315,6 +315,8 @@ describe('checkpoints: exact resume', () => {
     expect(b.checkpoint()).toEqual(straight.checkpoint());
     const [sa, sb] = [straight.snapshot(), b.snapshot()];
     expect(sb.weights).toEqual(sa.weights);
+    expect(sb.timeline).toEqual(sa.timeline);
+    expect(sb.paramHistory).toEqual(sa.paramHistory);
     expect(sb.trainLoss).toEqual(sa.trainLoss);
     expect(sb.testLoss).toEqual(sa.testLoss);
     expect([sb.epoch, sb.step, sb.trainAccuracy]).toEqual([sa.epoch, sa.step, sa.trainAccuracy]);
@@ -328,7 +330,39 @@ describe('checkpoints: exact resume', () => {
     expect(sb.epoch).toBe(N);
     expect(sb.trainLoss).toEqual(sa.trainLoss);
     expect(sb.trainAccuracy).toBe(sa.trainAccuracy);
-    expect(sb.timeline.epochs[0]).toBe(N);
+    // The charts' history carries on too.
+    expect(sb.timeline).toEqual(sa.timeline);
+    expect(sb.paramHistory).toEqual(sa.paramHistory);
+  });
+
+  it('chart history resumes exactly across a timeline compaction', () => {
+    const cfg = config('circle', {
+      dataset: { kind: 'circle', n: 100, noise: 0, seed: 1 },
+      network: { hidden: [{ units: 3, activation: 'tanh' }] },
+      gridSize: 2,
+    });
+    const straight = train(new TrainingSession(cfg), 300).snapshot();
+    const half = structuredClone(train(new TrainingSession(cfg), 150).checkpoint());
+    const resumed = train(new TrainingSession({ ...cfg, resume: half }), 150).snapshot();
+    expect(straight.timeline.epochs.length).toBeLessThan(128); // compacted at least once
+    expect(resumed.timeline).toEqual(straight.timeline);
+    expect(resumed.paramHistory).toEqual(straight.paramHistory);
+  });
+
+  it('without saved chart history (older files), the charts restart at the checkpoint', () => {
+    const cfg = config('circle', { gridSize: 4 });
+    const c = train(new TrainingSession(cfg), N).checkpoint();
+    c.observations = null;
+    const sb = new TrainingSession({ ...cfg, resume: c }).snapshot();
+    expect(Array.from(sb.timeline.epochs)).toEqual([N]);
+    expect(Array.from(sb.paramHistory.epochs)).toEqual([N]);
+  });
+
+  it('rejects chart history that does not fit the network', () => {
+    const cfg = config('circle', { gridSize: 4 });
+    const c = train(new TrainingSession(cfg), 2).checkpoint();
+    c.observations!.timeline.layers.pop();
+    expect(() => new TrainingSession({ ...cfg, resume: c })).toThrow(/timeline does not fit/);
   });
 
   // Mutation checks: each piece of saved state matters.
