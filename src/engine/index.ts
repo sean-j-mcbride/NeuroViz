@@ -1,1 +1,11 @@
+export * from './gradcheck';
+export * from './init';
+export * from './layers/activations';
+export * from './layers/dense';
+export type * from './layers/types';
+export * from './losses';
+export * from './optim';
 export { Rng } from './random';
+export * from './sequential';
+export * from './tensor';
+export * from './train';

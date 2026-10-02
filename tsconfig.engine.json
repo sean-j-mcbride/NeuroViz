@@ -6,5 +6,7 @@
     "lib": ["ES2022"],
     "types": []
   },
-  "include": ["src/engine", "src/data"]
+  "include": ["src/engine", "src/data"],
+  // Tests run under Node via Vitest and are typechecked by tsconfig.app.json.
+  "exclude": ["src/**/*.test.ts"]
 }

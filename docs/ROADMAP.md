@@ -111,11 +111,13 @@ Move to the next phase only when the current one feels solid.
 <!-- Claude Code appends "Done / decisions / known issues" notes here. -->
 
 ### Phase 0 — Scaffold (2026-10-02)
+
 **Done:** Vite + React + TS (strict) shell rendering `<h1>NeuroViz</h1>`; Vitest, ESLint (flat config),
 Prettier, Zustand stub store; folder structure with stub modules; seeded `Rng` (mulberry32 +
 Box–Muller) with tests; GitHub Actions running typecheck, lint and test.
 
 **Decisions:**
+
 - App renamed from NeuroScope to NeuroViz.
 - `tsconfig.engine.json` typechecks `src/engine` + `src/data` with `lib: ["ES2022"]` and no DOM,
   so DOM use in the engine fails `npm run typecheck`. ESLint `no-restricted-imports` also stops
@@ -124,3 +126,38 @@ Box–Muller) with tests; GitHub Actions running typecheck, lint and test.
 - CI also runs lint (the roadmap only asked for typecheck + test).
 
 **Known issues:** none.
+
+### Phase 1 — Engine core (2026-10-02)
+
+**Done:** `Tensor` + ops (`matmul` with transpose flags, `transpose`, `add` with row broadcast,
+`map`, `map2`, `sumAxis`, `sumAll`); `Dense`, `ReLU`, `Tanh`, `Sigmoid`; Xavier/He normal init;
+`MSELoss` and fused, numerically stable `SoftmaxCrossEntropyLoss`; `SGD`; `Sequential`;
+`Trainer.trainStep(x, y)`; gradient-check helper (`gradcheck.ts`). A 2-4-1 tanh/sigmoid net trains
+XOR to MSE 2.3e-4 in 3000 full-batch steps (seed 42, lr 1), bitwise identically on every run.
+39 tests.
+
+**Decisions:**
+
+- Ops are free functions with an optional `out` argument. Layers own their output/gradient
+  buffers and reallocate only when the batch size changes. Consequence: tensors returned by
+  `forward`/`backward` are overwritten by the next call — clone to keep them.
+- `matmul` folds transposes into its indexing, so backward (`xᵀ·g`, `g·Wᵀ`) allocates nothing.
+- `backward` **overwrites** parameter grads (it does not accumulate). Revisit if we ever need
+  gradient accumulation across micro-batches.
+- `Sequential` implements `Layer` and names params by layer index (`"0.W"`, `"2.b"`).
+- Gradient check: central differences dividing by the perturbation actually stored in float32;
+  normwise relative error ‖a−n‖ / (‖a‖+‖n‖) per tensor; scalar objective Σ y ⊙ R with a fixed random
+  R for layers. Default eps = 5e-3 (measured optimum between truncation and float32 noise).
+  A meta-test confirms a 1% error in dW is caught.
+- Tolerances: per-layer and per-loss checks use 1e-4 (all measure ≤ 2.4e-5). End-to-end model
+  checks use **1e-3**: a sweep over eps showed the first-layer W of dense→tanh→dense→sigmoid+MSE
+  has a float32 noise floor of ~1.2e-4 at the best eps (its gradients are tiny), so 1e-4 is not
+  reachable there in float32. This is not a bug — the error is U-shaped in eps.
+- XOR hyperparameters are not seed-sensitive: seeds 1–20 all reach final MSE < 2.5e-4.
+- `tsconfig.engine.json` excludes `*.test.ts` (tests run under Node and may use `console`);
+  production engine code is still checked without DOM types.
+
+**Known issues:**
+
+- Matmul is a naive triple loop — fine for now; the Phase 5 performance pass should revisit it.
+- The ReLU gradient check keeps inputs at |x| ≥ 0.1 to stay away from the kink at 0.
