@@ -369,6 +369,25 @@ button.primary {
   border-color: transparent;
 }
 
+/* Dead ReLU: hatched (texture, not colour alone), so it reads as "off", not as a value. */
+.neuron.dead::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent 0 4px,
+    color-mix(in srgb, var(--muted) 75%, transparent) 4px 5.5px
+  );
+  pointer-events: none;
+}
+
+.dead-count {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .probe-marker {
   position: absolute;
   width: 7px;

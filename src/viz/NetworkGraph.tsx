@@ -155,7 +155,17 @@ export function NetworkGraph({ snapshot, renderHeader, trace }: NetworkGraphProp
                 className="column-header"
                 style={{ left: colX(ci) + TILE / 2, width: Math.min(spacing, 140) }}
               >
-                <div className="column-label">{columnLabel(c, ci)}</div>
+                <div className="column-label">
+                  {columnLabel(c, ci)}
+                  {deadCount(c) > 0 && (
+                    <span
+                      className="dead-count"
+                      title="Neurons that output 0 for every training point (hatched)"
+                    >
+                      {` · ${deadCount(c)} dead`}
+                    </span>
+                  )}
+                </div>
                 {renderHeader?.(ci, c.kind)}
               </div>
               {Array.from({ length: c.units }, (_, u) => {
@@ -182,10 +192,11 @@ export function NetworkGraph({ snapshot, renderHeader, trace }: NetworkGraphProp
                   );
                 }
                 const dim = probe && !showForward && !showGrad;
+                const dead = c.dead?.[u] === 1;
                 return (
                   <div
                     key={u}
-                    className={`neuron${c.kind === 'output' ? ' output' : ''}${dim ? ' dim' : ''}${ring ? ' probed' : ''}`}
+                    className={`neuron${c.kind === 'output' ? ' output' : ''}${dim ? ' dim' : ''}${ring ? ' probed' : ''}${dead ? ' dead' : ''}`}
                     style={{
                       left: colX(ci),
                       top: nodeY(c, u),
@@ -220,6 +231,10 @@ export function NetworkGraph({ snapshot, renderHeader, trace }: NetworkGraphProp
       {hover && <HoverCard hover={hover} snapshot={snapshot} probe={probe} />}
     </div>
   );
+}
+
+function deadCount(c: NeuronColumn): number {
+  return c.dead ? c.dead.reduce((n, d) => n + d, 0) : 0;
 }
 
 function HoverCard({
@@ -265,6 +280,9 @@ function HoverCard({
   const pc = probe?.columns[ci];
   const rows: [string, string][] = [];
   let history: Float32Array | undefined;
+  if (c.dead?.[u] === 1) {
+    rows.push(['Dead', '0 for every training point, so no gradient reaches its weights']);
+  }
   if (ci > 0) {
     const layer = weights[ci - 1]!;
     rows.push(['Bias', formatPrecise(layer.b[u]!)]);

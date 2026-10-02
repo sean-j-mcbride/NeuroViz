@@ -13,6 +13,12 @@ export interface NeuronColumn {
    * values; the output column holds σ(logit), the probability of label 1.
    */
   values: Float32Array;
+  /**
+   * ReLU columns only: 1 for each neuron that outputs 0 for every training
+   * point (evaluation mode). No gradient reaches a dead neuron's incoming
+   * weights or bias, so it stays dead.
+   */
+  dead?: Uint8Array;
 }
 
 export interface DenseWeights {
@@ -134,7 +140,11 @@ export function snapshotBuffers(s: Snapshot): ArrayBuffer[] {
     s.timeline.epochs,
     s.paramHistory.epochs,
   ];
-  for (const c of s.columns) arrays.push(c.values);
+  const bytes: Uint8Array[] = [];
+  for (const c of s.columns) {
+    arrays.push(c.values);
+    if (c.dead) bytes.push(c.dead);
+  }
   for (const w of s.weights) arrays.push(w.W, w.b, w.gradW, w.gradB);
   for (const l of s.timeline.layers) arrays.push(l.weightHist, l.gradHist, l.weightRms, l.gradRms);
   for (const l of s.paramHistory.layers) arrays.push(l.W, l.b);
@@ -142,5 +152,5 @@ export function snapshotBuffers(s: Snapshot): ArrayBuffer[] {
     arrays.push(s.probe.x, ...s.probe.dW);
     for (const c of s.probe.columns) arrays.push(c.z, c.a, c.dZ, c.dA);
   }
-  return [...new Set(arrays.map((a) => a.buffer as ArrayBuffer))];
+  return [...new Set([...arrays, ...bytes].map((a) => a.buffer as ArrayBuffer))];
 }

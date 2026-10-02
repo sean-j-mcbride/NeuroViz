@@ -6,6 +6,7 @@ import { usePrefersDark } from '../viz/hooks';
 /** Per-layer weight and gradient distributions over the run: spot vanishing or exploding gradients. */
 export function InsidePanel() {
   const timeline = useAppStore((s) => s.snapshot?.timeline);
+  const columns = useAppStore((s) => s.snapshot?.columns);
   const dark = usePrefersDark();
   const [asTable, setAsTable] = useState(false);
   if (!timeline) return null;
@@ -26,7 +27,7 @@ export function InsidePanel() {
       </div>
 
       {asTable ? (
-        <InsideTables timeline={timeline} />
+        <InsideTables timeline={timeline} columns={columns} />
       ) : (
         <div className="inside-grid">
           <div className="inside-norms">

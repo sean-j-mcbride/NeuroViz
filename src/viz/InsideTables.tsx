@@ -1,4 +1,4 @@
-import type { TimelineSnapshot } from '../worker';
+import type { NeuronColumn, TimelineSnapshot } from '../worker';
 import { formatPrecise } from './colour';
 import { layerLabel } from './labels';
 import { shareWhere } from './timelineStats';
@@ -6,7 +6,21 @@ import { shareWhere } from './timelineStats';
 const pct = (f: number) => `${(f * 100).toFixed(1)} %`;
 
 /** The Inside-training charts as tables: the latest state per layer, and gradient size over time. */
-export function InsideTables({ timeline }: { timeline: TimelineSnapshot }) {
+/** "3 of 8" dead neurons in a ReLU column; "–" for other kinds. */
+function deadText(column: NeuronColumn | undefined): string {
+  if (!column?.dead) return '–';
+  const n = column.dead.reduce((a, d) => a + d, 0);
+  return `${n} of ${column.units}`;
+}
+
+export function InsideTables({
+  timeline,
+  columns,
+}: {
+  timeline: TimelineSnapshot;
+  /** The snapshot's neuron columns, for the dead-neuron counts. */
+  columns?: NeuronColumn[];
+}) {
   const { epochs, layers, weightBins, gradBins } = timeline;
   const n = layers.length;
   const T = epochs.length;
@@ -26,6 +40,12 @@ export function InsideTables({ timeline }: { timeline: TimelineSnapshot }) {
               <th scope="col">Weights with |w| &gt; 1</th>
               <th scope="col">Gradient RMS</th>
               <th scope="col">Gradients below 10⁻⁶</th>
+              <th
+                scope="col"
+                title="ReLU neurons fed by this layer that output 0 for every training point"
+              >
+                Dead outputs
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -36,6 +56,7 @@ export function InsideTables({ timeline }: { timeline: TimelineSnapshot }) {
                 <td>≈ {pct(shareWhere(l.weightHist, last, weightBins, (c) => Math.abs(c) > 1))}</td>
                 <td>{formatPrecise(l.gradRms[last]!)}</td>
                 <td>≈ {pct(shareWhere(l.gradHist, last, gradBins, (c) => c < 1e-6))}</td>
+                <td>{deadText(columns?.[k + 1])}</td>
               </tr>
             ))}
           </tbody>

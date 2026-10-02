@@ -89,4 +89,25 @@ describe('NetworkGraph', () => {
     render(<NetworkGraph snapshot={snapshot} renderHeader={(c) => <span>header {c}</span>} />);
     expect(screen.getByText('header 1')).toBeTruthy();
   });
+
+  it('hatches dead ReLU neurons and says why on hover', () => {
+    const relu = smallSession(0, { network: { hidden: [{ units: 3, activation: 'relu' }] } });
+    const snap = relu.snapshot();
+    const column = { ...snap.columns[1]!, dead: Uint8Array.of(0, 1, 0) };
+    const columns = snap.columns.map((c, i) => (i === 1 ? column : c));
+    const { container } = render(<NetworkGraph snapshot={{ ...snap, columns }} />);
+    const neurons = container.querySelectorAll('.neuron');
+    expect([...neurons].map((n) => n.classList.contains('dead'))).toEqual([
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+    ]);
+    fireEvent.mouseMove(neurons[3]!);
+    expect(tooltip()!.textContent).toContain('Dead0 for every training point');
+    fireEvent.mouseMove(neurons[2]!);
+    expect(tooltip()!.textContent).not.toContain('Dead');
+  });
 });

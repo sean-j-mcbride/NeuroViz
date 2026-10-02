@@ -82,8 +82,8 @@ export const PRESETS: readonly Preset[] = [
         'Blank neuron tiles in the network, and gradients piling up in the bottom bin of the ' +
         'histograms under Inside training. Accuracy stays close to chance.',
       tryThis:
-        'Lower the learning rate to 0.01: almost every neuron stays alive and the spirals ' +
-        'untangle within 200 epochs.',
+        'Lower the learning rate to 0.01: far fewer neurons die (under a fifth) and the ' +
+        'spirals untangle within 200 epochs.',
       config: {
         ...DEFAULT_CONFIG,
         network: { hidden: layers(4, 8, 'relu') },

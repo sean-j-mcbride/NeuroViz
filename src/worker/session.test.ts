@@ -362,3 +362,54 @@ describe('checkpoints: exact resume', () => {
     );
   });
 });
+
+describe('dead ReLUs', () => {
+  const relu = (layers: number): NetworkSpec => ({
+    hidden: Array.from({ length: layers }, () => ({ units: 8, activation: 'relu' as const })),
+  });
+  const deadCount = (s: TrainingSession) =>
+    s
+      .snapshot()
+      .columns.flatMap((c) => (c.dead ? Array.from(c.dead) : []))
+      .reduce((n, d) => n + d, 0);
+
+  it('flags ReLU neurons that output 0 for every training point; other kinds carry no flags', () => {
+    const network: NetworkSpec = { hidden: [...relu(1).hidden, { units: 3, activation: 'tanh' }] };
+    const s = new TrainingSession(config('circle', { network, gridSize: 4 }));
+    const [, r, t] = s.snapshot().columns;
+    expect(r!.dead).toHaveLength(8);
+    expect(t!.dead).toBeUndefined();
+  });
+
+  it('a neuron with a large negative bias is dead', () => {
+    const cfg = config('circle', { network: relu(1), gridSize: 4 });
+    const c = new TrainingSession(cfg).checkpoint();
+    c.params['0.b']![2] = -100; // far below any w·x on the ±6 plane
+    const snap = new TrainingSession({ ...cfg, resume: c }).snapshot();
+    expect(Array.from(snap.columns[1]!.dead!)).toEqual([0, 0, 1, 0, 0, 0, 0, 0]);
+  });
+
+  it('Adam at lr 0.1 kills many of a deep ReLU net’s neurons; lr 0.01 does not', () => {
+    const run = (lr: number) =>
+      train(
+        new TrainingSession(
+          config('spirals', { network: relu(4), optimiser: 'adam', lr, gridSize: 4 }),
+        ),
+        200,
+      );
+    expect(deadCount(run(0.1))).toBeGreaterThanOrEqual(13); // ≥ 40 % of 32
+    expect(deadCount(run(0.01))).toBeLessThanOrEqual(6);
+  });
+
+  it('flagging never changes the run', () => {
+    const cfg = config('spirals', { network: relu(2), optimiser: 'adam', lr: 0.1, gridSize: 4 });
+    const watched = new TrainingSession(cfg);
+    const plain = new TrainingSession(cfg);
+    for (let e = 0; e < 20; e++) {
+      watched.trainEpoch();
+      watched.snapshot();
+      plain.trainEpoch();
+    }
+    expect(watched.checkpoint()).toEqual(plain.checkpoint());
+  });
+});

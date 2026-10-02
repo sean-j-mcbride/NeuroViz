@@ -3,6 +3,7 @@ import {
   Dense,
   Dropout,
   type OptimiserKind,
+  ReLU,
   Rng,
   Sequential,
   Tensor,
@@ -93,6 +94,16 @@ function toNeuronMajor(h: Tensor): Float32Array {
     for (let u = 0; u < units; u++) out[u * points + p] = h.data[p * units + u]!;
   }
   return out;
+}
+
+/** Per column of `h` ([points, units]): 1 if it is 0 at every point. */
+function deadUnits(h: Tensor): Uint8Array {
+  const [points, units] = [h.rows, h.cols];
+  const dead = new Uint8Array(units).fill(1);
+  for (let p = 0; p < points; p++) {
+    for (let u = 0; u < units; u++) if (h.data[p * units + u] !== 0) dead[u] = 0;
+  }
+  return dead;
 }
 
 function sigmoid(z: number): number {
@@ -337,12 +348,21 @@ export class TrainingSession {
    * Full-batch gradient of (data loss + L2 penalty) over the training set in
    * evaluation mode, left in each param's `grad`. Safe between steps: the next
    * `trainStep` overwrites every gradient before the optimiser reads it.
+   * Also returns, per ReLU layer (by index in the model), which units are dead:
+   * 0 for every training point.
    */
-  private measureGradients(): void {
-    const logits = this.model.forward(this.train.x, false);
-    this.evalLoss.forward(logits, this.train.y);
+  private measureGradients(): Map<number, Uint8Array> {
+    // Layer by layer (as Sequential.forward does) so the ReLU outputs can be read on the way.
+    const dead = new Map<number, Uint8Array>();
+    let h = this.train.x;
+    this.model.layers.forEach((layer, i) => {
+      h = layer.forward(h, false);
+      if (layer instanceof ReLU) dead.set(i, deadUnits(h));
+    });
+    this.evalLoss.forward(h, this.train.y);
     this.model.backward(this.evalLoss.backward());
     addL2(this.model.params(), this.trainer.l2);
+    return dead;
   }
 
   /** The point sets; fixed for the life of the session. */
@@ -406,6 +426,7 @@ export class TrainingSession {
   }
 
   snapshot(opts: { probe?: ProbeRef } = {}): Snapshot {
+    const dead = this.measureGradients();
     const columns: NeuronColumn[] = [
       { kind: 'input', units: INPUTS, values: toNeuronMajor(this.grid) },
     ];
@@ -416,15 +437,15 @@ export class TrainingSession {
       if (i !== this.columnLayers[col]?.end) return;
       const hidden = this.network.hidden[col];
       const values = toNeuronMajor(h);
+      const flags = dead.get(this.columnLayers[col]!.dense + 1);
       columns.push(
         hidden
-          ? { kind: hidden.activation, units: hidden.units, values }
+          ? { kind: hidden.activation, units: hidden.units, values, ...(flags && { dead: flags }) }
           : { kind: 'output', units: 1, values: sigmoidInPlace(values) },
       );
       col++;
     });
 
-    this.measureGradients();
     const weights = this.dense.map((d) => ({
       inFeatures: d.inFeatures,
       outFeatures: d.outFeatures,

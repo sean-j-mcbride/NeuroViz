@@ -31,4 +31,20 @@ describe('InsideTables', () => {
       formatPrecise(l0!.gradRms[T - 1]! / l1!.gradRms[T - 1]!),
     );
   });
+
+  it('counts dead ReLU outputs per layer, with – for other kinds', () => {
+    const snap = smallSession(0, {
+      network: { hidden: [{ units: 3, activation: 'relu' }] },
+    }).snapshot();
+    const columns = snap.columns.map((c, i) =>
+      i === 1 ? { ...c, dead: Uint8Array.of(1, 0, 1) } : c,
+    );
+    const { container } = render(<InsideTables timeline={snap.timeline} columns={columns} />);
+    const rows = container.querySelectorAll('table')[0]!.querySelectorAll('tbody tr');
+    const lastCell = (r: Element) =>
+      within(r as HTMLElement)
+        .getAllByRole('cell')
+        .at(-1)!.textContent;
+    expect([...rows].map(lastCell)).toEqual(['2 of 3', '–']);
+  });
 });
