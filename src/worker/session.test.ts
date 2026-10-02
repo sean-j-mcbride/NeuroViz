@@ -41,17 +41,17 @@ describe('TrainingSession', () => {
     expect(snap.epoch).toBe(3);
     expect(snap.step).toBe(3 * 28);
     // Index 0 is the loss before training.
-    expect(snap.trainLoss).toHaveLength(4);
-    expect(snap.testLoss).toHaveLength(4);
+    expect(snap.losses.count).toBe(4);
+    expect(snap.losses.train.mean).toHaveLength(4);
   });
 
   it('is deterministic: same config → identical losses and weights', () => {
     const a = train(new TrainingSession(config('spirals')), 20).snapshot();
     const b = train(new TrainingSession(config('spirals')), 20).snapshot();
-    expect(b.trainLoss).toEqual(a.trainLoss);
+    expect(b.losses).toEqual(a.losses);
     expect(b.weights).toEqual(a.weights);
     const c = train(new TrainingSession(config('spirals', { seed: 2 })), 20).snapshot();
-    expect(c.trainLoss).not.toEqual(a.trainLoss);
+    expect(c.losses).not.toEqual(a.losses);
   });
 
   it('produces a structured-cloneable snapshot whose shapes match the network', () => {
@@ -155,7 +155,7 @@ describe('observing training', () => {
     }
     const [sa, sb] = [a.snapshot(), b.snapshot()];
     expect(sa.weights).toEqual(sb.weights);
-    expect(sa.trainLoss).toEqual(sb.trainLoss);
+    expect(sa.losses).toEqual(sb.losses);
   });
 
   it('records a bounded, evenly spaced timeline of histograms', () => {
@@ -317,8 +317,7 @@ describe('checkpoints: exact resume', () => {
     expect(sb.weights).toEqual(sa.weights);
     expect(sb.timeline).toEqual(sa.timeline);
     expect(sb.paramHistory).toEqual(sa.paramHistory);
-    expect(sb.trainLoss).toEqual(sa.trainLoss);
-    expect(sb.testLoss).toEqual(sa.testLoss);
+    expect(sb.losses).toEqual(sa.losses);
     expect([sb.epoch, sb.step, sb.trainAccuracy]).toEqual([sa.epoch, sa.step, sa.trainAccuracy]);
   });
 
@@ -328,7 +327,7 @@ describe('checkpoints: exact resume', () => {
     const b = new TrainingSession({ ...cfg, resume: a.checkpoint() });
     const [sa, sb] = [a.snapshot(), b.snapshot()];
     expect(sb.epoch).toBe(N);
-    expect(sb.trainLoss).toEqual(sa.trainLoss);
+    expect(sb.losses).toEqual(sa.losses);
     expect(sb.trainAccuracy).toBe(sa.trainAccuracy);
     // The charts' history carries on too.
     expect(sb.timeline).toEqual(sa.timeline);

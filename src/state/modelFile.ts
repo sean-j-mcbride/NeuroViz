@@ -2,6 +2,9 @@ import type { OptimiserKind, OptimiserState, RngState } from '../engine';
 import {
   type Checkpoint,
   type HyperparamChange,
+  type LossCurveState,
+  LossHistory,
+  type LossHistoryState,
   type ParamHistoryState,
   type TimelineState,
   TrainingSession,
@@ -31,9 +34,10 @@ import { parseConfig } from './validate';
 
 export const MODEL_FILE_FORMAT = 'neuroviz-model';
 /**
- * 2 added the settings log (`checkpoint.hyperparamLog`) and the charts'
- * history (`checkpoint.history`). Version 1 files still load, as if the
- * settings never changed during the run, and their charts restart.
+ * 2 added the settings log (`checkpoint.hyperparamLog`), the charts' history
+ * (`checkpoint.history`) and bounded loss curves (`checkpoint.losses`, which
+ * replaces the per-epoch `trainLoss` / `testLoss`). Version 1 files still load:
+ * as if the settings never changed during the run, with the charts restarting.
  */
 export const MODEL_FILE_VERSION = 2;
 
@@ -111,6 +115,31 @@ function historyBlock(
   };
 }
 
+/** A float64 that JSON can hold exactly; non-finite values as strings. */
+const exactNumber = (v: number): number | string => (Number.isFinite(v) ? v : String(v));
+
+function lossCurveBlock(c: LossCurveState, merged: boolean, raw: (a: Float32Array) => string) {
+  return {
+    // Until buckets merge, min = max = mean, so only the means are written.
+    mean: raw(c.mean),
+    ...(merged && { min: raw(c.min), max: raw(c.max) }),
+    partial: mapValues(c.partial, exactNumber),
+    latest: exactNumber(c.latest),
+    best: exactNumber(c.best),
+    bestEpoch: c.bestEpoch,
+  };
+}
+
+function lossesBlock(l: LossHistoryState, raw: (a: Float32Array) => string) {
+  const merged = l.width > 1;
+  return {
+    width: l.width,
+    count: l.count,
+    train: lossCurveBlock(l.train, merged, raw),
+    test: lossCurveBlock(l.test, merged, raw),
+  };
+}
+
 export function serialiseModelFile(
   config: PlaygroundConfig,
   c: Checkpoint,
@@ -128,8 +157,7 @@ export function serialiseModelFile(
     checkpoint: {
       epoch: c.epoch,
       step: c.step,
-      trainLoss: raw(c.trainLoss),
-      testLoss: raw(c.testLoss),
+      losses: lossesBlock(c.losses, raw),
       params: mapValues(c.params, raw),
       optimiser: {
         kind: c.optimiser.kind,
@@ -291,6 +319,51 @@ function history(v: unknown): Checkpoint['observations'] {
   return { timeline, params };
 }
 
+function exact(v: unknown, path: string): number {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string' && v in NON_FINITE) return NON_FINITE[v]!;
+  return fail(`${path} is not a number`);
+}
+
+function lossCurve(v: unknown, width: number, path: string): LossCurveState {
+  const c = record(v, path);
+  const mean = floats(c.mean, `${path}.mean`);
+  const partial = record(c.partial, `${path}.partial`);
+  const bestEpoch = c.bestEpoch === -1 ? -1 : int(c.bestEpoch, `${path}.bestEpoch`);
+  return {
+    mean,
+    min: width > 1 ? floats(c.min, `${path}.min`) : mean.slice(),
+    max: width > 1 ? floats(c.max, `${path}.max`) : mean.slice(),
+    partial: {
+      sum: exact(partial.sum, `${path}.partial.sum`),
+      n: int(partial.n, `${path}.partial.n`),
+      min: exact(partial.min, `${path}.partial.min`),
+      max: exact(partial.max, `${path}.partial.max`),
+    },
+    latest: exact(c.latest, `${path}.latest`),
+    best: exact(c.best, `${path}.best`),
+    bestEpoch,
+  };
+}
+
+function losses(c: Record<string, unknown>, version: number): LossHistoryState {
+  if (version < 2) {
+    // Version 1 kept every epoch: replay them.
+    const train = floats(c.trainLoss, 'checkpoint.trainLoss');
+    const test = floats(c.testLoss, 'checkpoint.testLoss');
+    if (train.length !== test.length) fail('checkpoint.trainLoss and testLoss differ in length');
+    return LossHistory.fromSeries(train, test).exportState();
+  }
+  const l = record(c.losses, 'checkpoint.losses');
+  const width = int(l.width, 'checkpoint.losses.width');
+  return {
+    width,
+    count: int(l.count, 'checkpoint.losses.count'),
+    train: lossCurve(l.train, width, 'checkpoint.losses.train'),
+    test: lossCurve(l.test, width, 'checkpoint.losses.test'),
+  };
+}
+
 function checkpoint(v: unknown, version: number, config: PlaygroundConfig): Checkpoint {
   const c = record(v, 'checkpoint');
   const log = c.hyperparamLog;
@@ -300,8 +373,7 @@ function checkpoint(v: unknown, version: number, config: PlaygroundConfig): Chec
   return {
     epoch: int(c.epoch, 'checkpoint.epoch'),
     step: int(c.step, 'checkpoint.step'),
-    trainLoss: floats(c.trainLoss, 'checkpoint.trainLoss'),
-    testLoss: floats(c.testLoss, 'checkpoint.testLoss'),
+    losses: losses(c, version),
     params: mapValues(params, (p, name) => floats(p, `checkpoint.params["${name}"]`)),
     optimiser: optimiserState(c.optimiser, 'checkpoint.optimiser'),
     rng: {

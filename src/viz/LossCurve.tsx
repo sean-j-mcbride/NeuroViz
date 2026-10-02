@@ -1,15 +1,16 @@
 import { type MouseEvent, useEffect, useRef, useState } from 'react';
+import type { LossCurveSummary, LossHistorySnapshot } from '../worker';
 import { cssVar } from './canvas';
 import { useElementWidth, usePrefersDark } from './hooks';
 import { lossAxis } from './lossAxis';
+import { type LossAt, lossAt, lossPoints } from './lossPoints';
 import { Tooltip } from './Tooltip';
 
 const HEIGHT = 150;
 const PAD = { left: 44, right: 8, top: 8, bottom: 20 };
 
 export interface LossSeries {
-  train: Float32Array;
-  test: Float32Array;
+  losses: LossHistorySnapshot;
   /** Mid-run setting changes, marked with ticks on the x-axis. */
   changes?: readonly { epoch: number; text: string }[];
 }
@@ -28,8 +29,16 @@ function formatTick(v: number): string {
   return Math.abs(v) >= 0.01 && Math.abs(v) < 1000 ? v.toPrecision(2) : v.toExponential(0);
 }
 
-function formatLoss(v: number | undefined): string {
-  return v === undefined ? '–' : Number.isFinite(v) ? v.toFixed(4) : String(v);
+function formatLoss(v: number): string {
+  return Number.isFinite(v) ? v.toFixed(4) : String(v);
+}
+
+/** "0.3142", or for a merged bucket "0.3142 (0.2901–0.3550, epochs 4,096–4,103)". */
+function formatAt(at: LossAt | null): string {
+  if (!at) return '–';
+  if (at.from === at.to) return formatLoss(at.mean);
+  const e = (n: number) => n.toLocaleString('en-GB');
+  return `${formatLoss(at.mean)} (${formatLoss(at.min)}–${formatLoss(at.max)}, epochs ${e(at.from)}–${e(at.to)})`;
 }
 
 /** Plot geometry shared by drawing and hover. */
@@ -43,16 +52,17 @@ function layout(width: number, epochs: number) {
 
 /**
  * Train and test loss per epoch, hand-drawn on a canvas, optionally over a
- * pinned reference run. The x-axis spans the longer of the two runs. Hover
- * shows every value at that epoch.
+ * pinned reference run. The x-axis spans the longer of the two runs. Where a
+ * drawn point stands for several epochs (long runs), a faint band shows their
+ * range, so spikes stay visible. Hover shows every value at that epoch.
  */
-export function LossCurve({ train, test, changes, logScale, reference }: LossCurveProps) {
+export function LossCurve({ losses, changes, logScale, reference }: LossCurveProps) {
   const wrap = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLCanvasElement>(null);
   const width = useElementWidth(wrap);
   const dark = usePrefersDark();
   const [hover, setHover] = useState<{ epoch: number; x: number; y: number } | null>(null);
-  const epochs = Math.max(train.length, reference?.train.length ?? 0);
+  const epochs = Math.max(losses.count, reference?.losses.count ?? 0);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -67,8 +77,11 @@ export function LossCurve({ train, test, changes, logScale, reference }: LossCur
     const n = epochs;
     const { plotW, xOf } = layout(width, n);
     const plotH = HEIGHT - PAD.top - PAD.bottom;
-    const all = reference ? [train, test, reference.train, reference.test] : [train, test];
-    const axis = lossAxis(all, logScale);
+    const runs = reference ? [losses, reference.losses] : [losses];
+    const axis = lossAxis(
+      runs.flatMap((l) => [l.train.mean, l.test.mean, l.train.max, l.test.max]),
+      logScale,
+    );
     if (!axis) return;
     const { lo, hi, clippedAbove } = axis;
     const f = logScale ? Math.log10 : (v: number) => v;
@@ -100,38 +113,62 @@ export function LossCurve({ train, test, changes, logScale, reference }: LossCur
     ctx.textAlign = 'right';
     ctx.fillText(`epoch ${n - 1}`, width - PAD.right, HEIGHT - PAD.bottom + 5);
 
-    // At most ~2 samples per pixel; long runs are thinned by striding.
-    const stride = Math.max(1, Math.floor(n / (plotW * 2)));
-    const line = (series: Float32Array, colour: string, dash: number[], width = 1.5) => {
-      const len = series.length;
+    // At most ~2 points per pixel; each stands for its epochs' mean, with their range as a band.
+    const usable = (v: number) => Number.isFinite(v) && (!logScale || v > 0);
+    const curve = (
+      c: LossCurveSummary,
+      l: LossHistorySnapshot,
+      colour: string,
+      dash: number[],
+      lineWidth: number,
+      bandAlpha: number,
+    ) => {
+      const p = lossPoints(c, l, Math.max(1, plotW * 2));
+      if (p.banded) {
+        ctx.fillStyle = colour;
+        ctx.globalAlpha = bandAlpha;
+        // One polygon per run of finite points: along the maxima, back along the minima.
+        let start = 0;
+        for (let k = 0; k <= p.x.length; k++) {
+          if (k < p.x.length && usable(p.lo[k]!) && usable(p.hi[k]!)) continue;
+          if (k - start > 1) {
+            ctx.beginPath();
+            for (let q = start; q < k; q++) ctx.lineTo(xOf(p.x[q]!), yOf(p.hi[q]!));
+            for (let q = k - 1; q >= start; q--) ctx.lineTo(xOf(p.x[q]!), yOf(p.lo[q]!));
+            ctx.closePath();
+            ctx.fill();
+          }
+          start = k + 1;
+        }
+        ctx.globalAlpha = 1;
+      }
       ctx.strokeStyle = colour;
-      ctx.lineWidth = width;
+      ctx.lineWidth = lineWidth;
       ctx.setLineDash(dash);
       ctx.beginPath();
       let started = false;
-      const point = (i: number) => {
-        const v = series[i]!;
-        if (!Number.isFinite(v) || (logScale && v <= 0)) {
+      for (let k = 0; k < p.x.length; k++) {
+        const v = p.mean[k]!;
+        if (!usable(v)) {
           started = false; // a gap, not a line through the missing value
-          return;
+          continue;
         }
-        if (started) ctx.lineTo(xOf(i), yOf(v));
-        else ctx.moveTo(xOf(i), yOf(v));
+        if (started) ctx.lineTo(xOf(p.x[k]!), yOf(v));
+        else ctx.moveTo(xOf(p.x[k]!), yOf(v));
         started = true;
-      };
-      for (let i = 0; i < len; i += stride) point(i);
-      if (len > 0 && (len - 1) % stride !== 0) point(len - 1);
+      }
       ctx.stroke();
       ctx.setLineDash([]);
     };
     if (reference) {
       const colour = cssVar(canvas, '--reference-line');
       // Thinner than the live run's lines, which stay in front.
-      line(reference.test, colour, [4, 3], 1);
-      line(reference.train, colour, [], 1);
+      const l = reference.losses;
+      curve(l.test, l, colour, [4, 3], 1, 0.1);
+      curve(l.train, l, colour, [], 1, 0.12);
     }
-    line(test, cssVar(canvas, '--test-line'), [4, 3]);
-    line(train, cssVar(canvas, '--train-line'), []);
+    curve(losses.test, losses, cssVar(canvas, '--test-line'), [4, 3], 1.5, 0.15);
+    curve(losses.train, losses, cssVar(canvas, '--train-line'), [], 1.5, 0.15);
 
     // Mid-run setting changes: short ticks up from the x-axis, in each run's colour.
     const ticks = (list: LossSeries['changes'], colour: string, lift: number) => {
@@ -160,7 +197,7 @@ export function LossCurve({ train, test, changes, logScale, reference }: LossCur
       ctx.fillStyle = muted;
       ctx.fillText(label, x, y);
     }
-  }, [train, test, changes, reference, epochs, logScale, width, dark]);
+  }, [losses, changes, reference, epochs, logScale, width, dark]);
 
   const onMove = (e: MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -170,11 +207,15 @@ export function LossCurve({ train, test, changes, logScale, reference }: LossCur
 
   const rows: [string, string][] = [];
   if (hover) {
-    const at = (s: Float32Array) => formatLoss(s[hover.epoch]);
+    const at = (c: LossCurveSummary, l: LossHistorySnapshot) => formatAt(lossAt(c, l, hover.epoch));
     const prefix = reference ? 'This run, ' : '';
-    rows.push([`${prefix}train`, at(train)], [`${prefix}test`, at(test)]);
+    rows.push(
+      [`${prefix}train`, at(losses.train, losses)],
+      [`${prefix}test`, at(losses.test, losses)],
+    );
     if (reference) {
-      rows.push(['Reference, train', at(reference.train)], ['Reference, test', at(reference.test)]);
+      const l = reference.losses;
+      rows.push(['Reference, train', at(l.train, l)], ['Reference, test', at(l.test, l)]);
     }
     // Describe any change whose tick is within reach of the pointer.
     const plotW = Math.max(1, width - PAD.left - PAD.right);

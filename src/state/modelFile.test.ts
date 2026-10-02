@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TrainingSession } from '../worker';
+import { LossHistory, TrainingSession } from '../worker';
 import { DEFAULT_CONFIG, type PlaygroundConfig, toSessionConfig } from './config';
 import { ModelFileError, formatFloat32, parseModelFile, serialiseModelFile } from './modelFile';
 
@@ -59,18 +59,34 @@ describe('model files', () => {
     const text = serialiseModelFile(CONFIG, trained(CONFIG, 1).checkpoint(), SAVED_AT);
     expect(text).toMatch(/^\{\n {2}"format": "neuroviz-model",\n {2}"version": 2,/);
     expect(text).toMatch(/\n {6}"0\.W": \[-?\d[^\n]*\],?\n/);
-    expect(text.split('\n').length).toBeLessThan(150);
+    expect(text.split('\n').length).toBeLessThan(200);
     // The charts' history is one labelled, compact block.
     expect(text).toMatch(/\n {4}"history": \{\n {6}"note": "Display only/);
   });
 
+  it('a long run’s merged loss history round-trips exactly, at bounded size', () => {
+    const c = trained(CONFIG, 1).checkpoint();
+    const h = new LossHistory();
+    for (let i = 0; i < 100_000; i++) h.push(Math.fround(1 / (i + 1)), Math.fround(Math.sin(i)));
+    c.losses = h.exportState();
+    c.epoch = 99_999;
+    const text = serialiseModelFile(CONFIG, c, SAVED_AT);
+    expect(parseModelFile(text).checkpoint.losses).toEqual(c.losses);
+    expect(c.losses.width).toBe(32);
+    // At most 3 × 4,096 values per curve (mean, min, max), whatever the run length:
+    // ~330 KB here, against ~2.3 MB if every one of the 100,000 epochs were kept.
+    expect(text.length).toBeLessThan(400_000);
+  });
+
   it('keeps non-finite losses from a diverged run', () => {
     const c = trained(CONFIG, 1).checkpoint();
-    c.trainLoss[1] = Infinity;
-    c.testLoss[1] = Number.NaN;
+    for (const k of ['mean', 'min', 'max'] as const) {
+      c.losses.train[k][1] = Infinity;
+      c.losses.test[k][1] = Number.NaN;
+    }
     const back = parseModelFile(serialiseModelFile(CONFIG, c)).checkpoint;
-    expect(back.trainLoss[1]).toBe(Infinity);
-    expect(back.testLoss[1]).toBeNaN();
+    expect(back.losses.train.max[1]).toBe(Infinity);
+    expect(back.losses.test.mean[1]).toBeNaN();
   });
 
   describe('rejects with a readable reason', () => {
@@ -167,14 +183,19 @@ describe('model files', () => {
   });
 
   it('still reads version 1 files, as if the settings never changed', () => {
-    const doc = JSON.parse(serialiseModelFile(CONFIG, trained(CONFIG, 2).checkpoint())) as {
+    const original = trained(CONFIG, 2).checkpoint();
+    const doc = JSON.parse(serialiseModelFile(CONFIG, original)) as {
       version: number;
       checkpoint: Record<string, unknown>;
     };
+    // Version 1 kept per-epoch arrays and had no settings log or chart history.
     doc.version = 1;
-    delete doc.checkpoint.hyperparamLog;
+    doc.checkpoint.trainLoss = Array.from(original.losses.train.mean);
+    doc.checkpoint.testLoss = Array.from(original.losses.test.mean);
+    for (const key of ['losses', 'hyperparamLog', 'history']) delete doc.checkpoint[key];
     const { checkpoint } = parseModelFile(JSON.stringify(doc));
     expect(checkpoint.epoch).toBe(2);
+    expect(checkpoint.losses).toEqual(original.losses); // replayed exactly
     expect(checkpoint.hyperparamLog).toEqual([{ epoch: 0, hyperparams: CONFIG.training }]);
     expect(checkpoint.observations).toBeNull();
   });

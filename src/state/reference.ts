@@ -1,5 +1,6 @@
 import {
   type HyperparamChange,
+  type LossHistorySnapshot,
   type OutputGrid,
   type SessionData,
   type Snapshot,
@@ -14,8 +15,7 @@ export interface ReferenceRun {
   label: string;
   config: PlaygroundConfig;
   epoch: number;
-  trainLoss: Float32Array;
-  testLoss: Float32Array;
+  losses: LossHistorySnapshot;
   trainAccuracy: number;
   testAccuracy: number;
   boundary: OutputGrid;
@@ -35,8 +35,7 @@ export function referenceFromSnapshot(
     label,
     config,
     epoch: s.epoch,
-    trainLoss: s.trainLoss,
-    testLoss: s.testLoss,
+    losses: s.losses,
     trainAccuracy: s.trainAccuracy,
     testAccuracy: s.testAccuracy,
     boundary: outputGrid(s),

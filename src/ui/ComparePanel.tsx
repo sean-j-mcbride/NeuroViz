@@ -3,32 +3,30 @@ import { type RunChange, changesDuringRun, diffConfigs } from '../state/configDi
 import { referenceFromFile } from '../state/reference';
 import { useAppStore } from '../state/store';
 import { DecisionBoundary } from '../viz';
-import { outputGrid } from '../worker';
+import { type LossHistorySnapshot, outputGrid } from '../worker';
 import { errorText, readModelFile } from './files';
 
 interface RunStats {
   epoch: number;
-  trainLoss: Float32Array;
-  testLoss: Float32Array;
+  losses: LossHistorySnapshot;
   trainAccuracy: number;
   testAccuracy: number;
 }
 
-const last = (a: Float32Array) => a[a.length - 1];
-const best = (a: Float32Array) => {
-  let m = Infinity;
-  for (const v of a) if (v < m) m = v;
-  return Number.isFinite(m) ? m : undefined;
-};
-const loss = (v: number | undefined) =>
-  v === undefined ? '–' : Number.isFinite(v) ? v.toFixed(4) : String(v);
+const loss = (v: number) => (Number.isFinite(v) ? v.toFixed(4) : String(v));
 const pct = (v: number) => `${(v * 100).toFixed(1)} %`;
 
 const ROWS: [string, (r: RunStats) => string][] = [
   ['Epoch', (r) => r.epoch.toLocaleString('en-GB')],
-  ['Train loss', (r) => loss(last(r.trainLoss))],
-  ['Test loss', (r) => loss(last(r.testLoss))],
-  ['Lowest test loss', (r) => loss(best(r.testLoss))],
+  ['Train loss', (r) => loss(r.losses.train.latest)],
+  ['Test loss', (r) => loss(r.losses.test.latest)],
+  [
+    'Lowest test loss',
+    ({ losses: { test } }) =>
+      test.bestEpoch < 0
+        ? '–'
+        : `${loss(test.best)} (epoch ${test.bestEpoch.toLocaleString('en-GB')})`,
+  ],
   ['Train accuracy', (r) => pct(r.trainAccuracy)],
   ['Test accuracy', (r) => pct(r.testAccuracy)],
 ];

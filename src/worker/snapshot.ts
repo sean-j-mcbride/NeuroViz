@@ -1,4 +1,5 @@
 import type { ParamHistorySnapshot, TimelineSnapshot } from './history';
+import type { LossHistorySnapshot } from './lossHistory';
 import type { Activation } from './network';
 import type { HyperparamChange } from './session';
 
@@ -94,9 +95,12 @@ export interface Snapshot {
   epoch: number;
   /** Total number of optimiser steps (mini-batches) so far. */
   step: number;
-  /** Full-dataset losses after each epoch; index e is the loss after epoch e (0 = before training). */
-  trainLoss: Float32Array;
-  testLoss: Float32Array;
+  /**
+   * Full-dataset train and test loss per epoch (epoch 0 = before training).
+   * Exact for the first 4,096 epochs, then merged into buckets with their
+   * mean, min and max; the latest and lowest values are always exact.
+   */
+  losses: LossHistorySnapshot;
   trainAccuracy: number;
   testAccuracy: number;
   /** Inputs span [−domain, domain]². */
@@ -138,8 +142,12 @@ export function outputGrid(s: Snapshot): OutputGrid {
 /** Every typed-array buffer in a snapshot, for a zero-copy `postMessage` transfer list. */
 export function snapshotBuffers(s: Snapshot): ArrayBuffer[] {
   const arrays: Float32Array[] = [
-    s.trainLoss,
-    s.testLoss,
+    s.losses.train.mean,
+    s.losses.train.min,
+    s.losses.train.max,
+    s.losses.test.mean,
+    s.losses.test.min,
+    s.losses.test.max,
     s.timeline.epochs,
     s.paramHistory.epochs,
   ];

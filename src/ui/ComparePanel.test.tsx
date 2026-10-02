@@ -66,7 +66,7 @@ describe('ComparePanel', () => {
     });
     await waitFor(() => expect(s().reference?.label).toBe('baseline.json'));
     expect(s().reference?.epoch).toBe(7);
-    expect(s().reference?.trainLoss).toHaveLength(8);
+    expect(s().reference?.losses.count).toBe(8);
   });
 
   it('lists each run’s mid-run setting changes', () => {

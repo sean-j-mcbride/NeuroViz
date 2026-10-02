@@ -17,8 +17,7 @@ export function OutputPanel() {
   const referenceSeries = useMemo(
     () =>
       reference && {
-        train: reference.trainLoss,
-        test: reference.testLoss,
+        losses: reference.losses,
         changes: changesDuringRun(reference.hyperparamLog),
       },
     [reference],
@@ -63,8 +62,7 @@ export function OutputPanel() {
         )}
       </div>
       <LossCurve
-        train={snapshot.trainLoss}
-        test={snapshot.testLoss}
+        losses={snapshot.losses}
         changes={changes}
         logScale={logScale}
         reference={referenceSeries}

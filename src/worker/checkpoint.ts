@@ -1,5 +1,6 @@
 import type { OptimiserState, ParamValues, RngState } from '../engine';
 import type { ParamHistoryState, TimelineState } from './history';
+import type { LossHistoryState } from './lossHistory';
 import type { HyperparamChange } from './session';
 
 /**
@@ -13,9 +14,8 @@ export interface Checkpoint {
   epoch: number;
   /** Optimiser steps (mini-batches) so far. */
   step: number;
-  /** Full-dataset losses after each epoch, as in `Snapshot` (length epoch + 1). */
-  trainLoss: Float32Array;
-  testLoss: Float32Array;
+  /** Full-dataset losses per epoch, bounded (see `LossHistory`); covers epochs 0 … epoch. */
+  losses: LossHistoryState;
   /** Parameter values by name ("0.W", "0.b", …). */
   params: ParamValues;
   optimiser: OptimiserState;
@@ -43,8 +43,7 @@ export interface Checkpoint {
 /** Every typed-array buffer in a checkpoint, for a zero-copy `postMessage` transfer list. */
 export function checkpointBuffers(c: Checkpoint): ArrayBuffer[] {
   const arrays: (Float32Array | Uint32Array)[] = [
-    c.trainLoss,
-    c.testLoss,
+    ...lossArrays(c.losses),
     c.order,
     ...Object.values(c.params),
     ...Object.values(c.optimiser.slots).flat(),
@@ -55,4 +54,8 @@ export function checkpointBuffers(c: Checkpoint): ArrayBuffer[] {
     for (const l of timeline.layers) arrays.push(l.weightHist, l.gradHist, l.weightRms, l.gradRms);
   }
   return [...new Set(arrays.map((a) => a.buffer as ArrayBuffer))];
+}
+
+function lossArrays({ train, test }: LossHistoryState): Float32Array[] {
+  return [train.mean, train.min, train.max, test.mean, test.min, test.max];
 }

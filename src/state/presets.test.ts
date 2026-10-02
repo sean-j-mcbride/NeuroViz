@@ -12,7 +12,6 @@ function run(config: PlaygroundConfig, epochs: number): Snapshot {
 
 const preset = (id: PresetId) => PRESETS.find((p) => p.id === id)!;
 const last = (a: Float32Array) => a[a.length - 1]!;
-const min = (a: Float32Array) => a.reduce((m, v) => Math.min(m, v), Infinity);
 
 /** Fraction of ReLU neurons the snapshot flags as dead (0 for every training point). */
 function deadFraction(s: Snapshot): number {
@@ -23,10 +22,10 @@ function deadFraction(s: Snapshot): number {
 /** Fraction of epochs whose training loss rose by more than 5 %. */
 function jumpiness(s: Snapshot): number {
   let ups = 0;
-  for (let i = 1; i < s.trainLoss.length; i++) {
-    if (s.trainLoss[i]! > 1.05 * s.trainLoss[i - 1]!) ups++;
+  for (let i = 1; i < s.losses.train.mean.length; i++) {
+    if (s.losses.train.mean[i]! > 1.05 * s.losses.train.mean[i - 1]!) ups++;
   }
-  return ups / (s.trainLoss.length - 1);
+  return ups / (s.losses.train.mean.length - 1);
 }
 
 describe('presets', () => {
@@ -44,8 +43,8 @@ describe('presets', () => {
     const p = preset('underfitting');
     const s = run(p.config, 300);
     expect(s.trainAccuracy).toBeLessThan(0.75);
-    expect(last(s.trainLoss)).toBeGreaterThan(0.5);
-    expect(Math.abs(last(s.trainLoss) - last(s.testLoss))).toBeLessThan(0.05);
+    expect(last(s.losses.train.mean)).toBeGreaterThan(0.5);
+    expect(Math.abs(last(s.losses.train.mean) - last(s.losses.test.mean))).toBeLessThan(0.05);
     expect(run(p.fix, 300).trainAccuracy).toBeGreaterThan(0.95);
   });
 
@@ -55,11 +54,11 @@ describe('presets', () => {
     const p = preset('overfitting');
     const s = run(p.config, 1000);
     expect(s.trainAccuracy).toBeGreaterThan(0.9);
-    expect(last(s.trainLoss)).toBeLessThan(0.15);
-    expect(last(s.testLoss)).toBeGreaterThan(3 * min(s.testLoss));
+    expect(last(s.losses.train.mean)).toBeLessThan(0.15);
+    expect(last(s.losses.test.mean)).toBeGreaterThan(3 * s.losses.test.best);
     const fixed = run(p.fix, 1000);
-    expect(last(fixed.testLoss)).toBeLessThan(0.5);
-    expect(last(fixed.testLoss)).toBeLessThan(0.3 * last(s.testLoss));
+    expect(last(fixed.losses.test.mean)).toBeLessThan(0.5);
+    expect(last(fixed.losses.test.mean)).toBeLessThan(0.3 * last(s.losses.test.mean));
   });
 
   // Seeds 1–5 for 200 epochs: 53–72 % of neurons dead, accuracy 48–65 %;
@@ -80,7 +79,7 @@ describe('presets', () => {
     const p = preset('too-high-lr');
     const s = run(p.config, 500);
     expect(jumpiness(s)).toBeGreaterThan(0.3);
-    expect(last(s.trainLoss)).toBeGreaterThan(s.trainLoss[0]!);
+    expect(last(s.losses.train.mean)).toBeGreaterThan(s.losses.train.mean[0]!);
     expect(jumpiness(run(p.fix, 500))).toBeLessThan(0.05);
   });
 });

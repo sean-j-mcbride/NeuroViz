@@ -2,6 +2,7 @@
 // protocol that drives it from the UI.
 export * from './checkpoint';
 export * from './history';
+export * from './lossHistory';
 export * from './network';
 export * from './protocol';
 export * from './session';

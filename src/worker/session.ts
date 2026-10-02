@@ -26,6 +26,7 @@ import {
 } from '../data';
 import type { Checkpoint } from './checkpoint';
 import { HistogramTimeline, ParamHistory } from './history';
+import { LossHistory } from './lossHistory';
 import { INPUTS, type NetworkSpec, networkToLayerConfig } from './network';
 import type {
   NeuronColumn,
@@ -128,32 +129,6 @@ function sigmoidInPlace(a: Float32Array): Float32Array {
   return a;
 }
 
-/** Growable float history. */
-class History {
-  private data = new Float32Array(256);
-  length = 0;
-
-  push(v: number): void {
-    if (this.length === this.data.length) {
-      const next = new Float32Array(this.data.length * 2);
-      next.set(this.data);
-      this.data = next;
-    }
-    this.data[this.length++] = v;
-  }
-
-  copy(): Float32Array {
-    return this.data.slice(0, this.length);
-  }
-
-  /** Replaces the contents. */
-  load(values: Float32Array): void {
-    this.data = new Float32Array(Math.max(256, values.length * 2));
-    this.data.set(values);
-    this.length = values.length;
-  }
-}
-
 /**
  * One training run of an MLP on a 2D toy dataset with BCE-with-logits.
  * DOM-free, so it runs unchanged in a Worker (or in tests).
@@ -184,8 +159,7 @@ export class TrainingSession {
   private readonly evalLoss = new BCEWithLogitsLoss();
   private batchSize: number;
   private batch: { x: Tensor; y: Tensor } | null = null;
-  private readonly trainLoss = new History();
-  private readonly testLoss = new History();
+  private readonly losses = new LossHistory();
   private readonly timeline: HistogramTimeline;
   private readonly paramHistory: ParamHistory;
   /** Every hyperparameter setting used, starting with epoch 0's. */
@@ -246,8 +220,7 @@ export class TrainingSession {
     return {
       epoch: this.epoch,
       step: this.step,
-      trainLoss: this.trainLoss.copy(),
-      testLoss: this.testLoss.copy(),
+      losses: this.losses.exportState(),
       params: exportParams(this.model),
       optimiser: this.trainer.optimiser.saveState(this.model.params()),
       rng: { shuffle: this.shuffleRng.getState(), dropout: this.initRng.getState() },
@@ -286,7 +259,7 @@ export class TrainingSession {
       if (i >= n || seen[i]) throw new Error('Checkpoint order is not a permutation');
       seen[i] = 1;
     }
-    if (c.trainLoss.length !== c.epoch + 1 || c.testLoss.length !== c.epoch + 1) {
+    if (c.losses.count !== c.epoch + 1) {
       throw new Error(`Checkpoint loss history does not cover epochs 0–${c.epoch}`);
     }
     importParams(this.model, c.params);
@@ -298,8 +271,7 @@ export class TrainingSession {
     this.order.set(c.order);
     this.epoch = c.epoch;
     this.step = c.step;
-    this.trainLoss.load(c.trainLoss);
-    this.testLoss.load(c.testLoss);
+    this.losses.importState(c.losses);
     const log = c.hyperparamLog;
     if (
       log.length === 0 ||
@@ -392,8 +364,8 @@ export class TrainingSession {
   private recordMetrics(): void {
     const tr = this.evaluate(this.train);
     const te = this.evaluate(this.test);
-    this.trainLoss.push(tr.loss);
-    this.testLoss.push(te.loss);
+    // Rounded to float32, as the losses have always been kept (and older files hold them).
+    this.losses.push(Math.fround(tr.loss), Math.fround(te.loss));
     this.trainAccuracy = tr.accuracy;
     this.testAccuracy = te.accuracy;
     this.observe();
@@ -529,8 +501,7 @@ export class TrainingSession {
     return {
       epoch: this.epoch,
       step: this.step,
-      trainLoss: this.trainLoss.copy(),
-      testLoss: this.testLoss.copy(),
+      losses: this.losses.snapshot(),
       trainAccuracy: this.trainAccuracy,
       testAccuracy: this.testAccuracy,
       domain: DOMAIN,

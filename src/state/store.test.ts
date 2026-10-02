@@ -136,7 +136,7 @@ describe('store: loading, presets and the reference run', () => {
     s().tryPresetFix();
     const ref = s().reference!;
     expect(ref).toMatchObject({ label: 'Too high LR', config: p.config, epoch: 3 });
-    expect(ref.trainLoss).toHaveLength(4);
+    expect(ref.losses.count).toBe(4);
     expect(ref.boundary.values).toHaveLength(16);
     expect(ref.data?.train.y.length).toBe(280);
     expect(s().config).toEqual(p.fix);
