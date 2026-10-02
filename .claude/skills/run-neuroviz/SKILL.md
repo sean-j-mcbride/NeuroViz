@@ -75,6 +75,7 @@ says which one ran, e.g. `browser: chrome 154.0.8037.95`.
 | `click SELECTOR`           | Playwright selector, e.g. `button:has-text("Step")`, `[aria-label="Add a hidden layer"]`         |
 | `select SELECTOR VALUE`    | choose a `<select>` option (the last word is the value)                                          |
 | `hover SELECTOR`           | move the mouse to the element's centre and print any tooltip text                                |
+| `move SELECTOR FX FY`      | move the mouse to (FX, FY) as fractions of the element's box (e.g. a point on the loss curve)    |
 | `text SELECTOR`            | print the element's text                                                                         |
 | `wait MS`                  | sleep                                                                                            |
 | `play MS`                  | Play, wait, Pause, let the last snapshot land; prints the epoch and loss/accuracy table          |

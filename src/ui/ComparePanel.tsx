@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { diffConfigs } from '../state/configDiff';
+import { type RunChange, changesDuringRun, diffConfigs } from '../state/configDiff';
 import { referenceFromFile } from '../state/reference';
 import { useAppStore } from '../state/store';
 import { DecisionBoundary } from '../viz';
@@ -100,6 +100,8 @@ export function ComparePanel() {
   }
 
   const changes = diffConfigs(reference.config, config);
+  const referenceChanges = changesDuringRun(reference.hyperparamLog);
+  const runChanges = changesDuringRun(snapshot.hyperparamLog);
   return (
     <section className="panel compare-panel">
       <div className="panel-toolbar">
@@ -164,8 +166,32 @@ export function ComparePanel() {
               ))}
             </ul>
           )}
+          {(referenceChanges.length > 0 || runChanges.length > 0) && (
+            <>
+              <h3 className="compare-subhead">Changed during the run</h3>
+              <ChangeList who="Reference" changes={referenceChanges} />
+              <ChangeList who="This run" changes={runChanges} />
+            </>
+          )}
         </div>
       </div>
     </section>
+  );
+}
+
+/** One run's mid-run setting changes (also marked with ticks on the loss curve). */
+function ChangeList({ who, changes }: { who: string; changes: RunChange[] }) {
+  if (changes.length === 0) return <p className="hint">{who}: none.</p>;
+  return (
+    <ul aria-label={`${who}: changes during the run`}>
+      {changes.map((c) => (
+        <li key={c.epoch}>
+          <span className="diff-label">
+            {who}, epoch {c.epoch.toLocaleString('en-GB')}:
+          </span>{' '}
+          {c.text}
+        </li>
+      ))}
+    </ul>
   );
 }

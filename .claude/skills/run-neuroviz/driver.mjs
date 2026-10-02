@@ -107,6 +107,15 @@ const commands = {
     await page.waitForTimeout(200);
     return { tooltip: await tooltip() };
   },
+  /** move SELECTOR FX FY — move the mouse to (FX, FY) as fractions of the element's box; prints any tooltip. */
+  async move(...words) {
+    const fy = Number(words.pop());
+    const fx = Number(words.pop());
+    const box = await page.locator(words.join(' ')).first().boundingBox();
+    await page.mouse.move(box.x + fx * box.width, box.y + fy * box.height);
+    await page.waitForTimeout(200);
+    return { tooltip: await tooltip() };
+  },
   async wait(ms) {
     await page.waitForTimeout(Number(ms));
     return {};

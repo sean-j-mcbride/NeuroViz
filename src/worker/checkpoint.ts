@@ -1,4 +1,5 @@
 import type { OptimiserState, ParamValues, RngState } from '../engine';
+import type { HyperparamChange } from './session';
 
 /**
  * Everything needed to continue a training session exactly where it stopped:
@@ -28,6 +29,8 @@ export interface Checkpoint {
    * previous order in place, so the next order depends on it.
    */
   order: Uint32Array;
+  /** The settings used over the run so far: epoch 0's, then each change. */
+  hyperparamLog: HyperparamChange[];
 }
 
 /** Every typed-array buffer in a checkpoint, for a zero-copy `postMessage` transfer list. */

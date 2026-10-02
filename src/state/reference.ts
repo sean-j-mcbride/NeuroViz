@@ -1,4 +1,5 @@
 import {
+  type HyperparamChange,
   type OutputGrid,
   type SessionData,
   type Snapshot,
@@ -18,6 +19,8 @@ export interface ReferenceRun {
   trainAccuracy: number;
   testAccuracy: number;
   boundary: OutputGrid;
+  /** The settings used over the run: epoch 0's, then each mid-run change. */
+  hyperparamLog: HyperparamChange[];
   /** The run's data points; null if they never arrived. */
   data: SessionData | null;
 }
@@ -37,6 +40,7 @@ export function referenceFromSnapshot(
     trainAccuracy: s.trainAccuracy,
     testAccuracy: s.testAccuracy,
     boundary: outputGrid(s),
+    hyperparamLog: s.hyperparamLog,
     data,
   };
 }

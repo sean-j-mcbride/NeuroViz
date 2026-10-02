@@ -1,6 +1,6 @@
 import type { OptimiserKind, OptimiserState, RngState } from '../engine';
-import { type Checkpoint, TrainingSession } from '../worker';
-import { type PlaygroundConfig, toSessionConfig } from './config';
+import { type Checkpoint, type HyperparamChange, TrainingSession } from '../worker';
+import { DEFAULT_CONFIG, type PlaygroundConfig, toSessionConfig } from './config';
 import { parseConfig } from './validate';
 
 /*
@@ -12,7 +12,11 @@ import { parseConfig } from './validate';
  */
 
 export const MODEL_FILE_FORMAT = 'neuroviz-model';
-export const MODEL_FILE_VERSION = 1;
+/**
+ * 2 added the settings log (`checkpoint.hyperparamLog`). Version 1 files still
+ * load, as if the settings never changed during the run.
+ */
+export const MODEL_FILE_VERSION = 2;
 
 export interface ModelFile {
   config: PlaygroundConfig;
@@ -50,9 +54,10 @@ export function serialiseModelFile(
   c: Checkpoint,
   savedAt: string = new Date().toISOString(),
 ): string {
-  // Typed arrays go in as placeholders, then are spliced in on one line each.
+  // Typed arrays and log entries go in as placeholders, then are spliced in on one line each.
   const arrays: string[] = [];
   const raw = (a: Float32Array | Uint32Array) => `@@${arrays.push(formatArray(a)) - 1}@@`;
+  const oneLine = (v: unknown) => `@@${arrays.push(JSON.stringify(v).replace(/,"/g, ', "')) - 1}@@`;
   const doc = {
     format: MODEL_FILE_FORMAT,
     version: MODEL_FILE_VERSION,
@@ -71,6 +76,7 @@ export function serialiseModelFile(
       },
       rng: c.rng,
       order: raw(c.order),
+      hyperparamLog: c.hyperparamLog.map(oneLine),
     },
   };
   return `${JSON.stringify(doc, null, 2).replace(/"@@(\d+)@@"/g, (_, i: string) => arrays[Number(i)]!)}\n`;
@@ -143,8 +149,21 @@ function optimiserState(v: unknown, path: string): OptimiserState {
   };
 }
 
-function checkpoint(v: unknown): Checkpoint {
+/** One logged setting change; the settings must be ones the controls offer. */
+function hyperparamChange(v: unknown, path: string): HyperparamChange {
+  const e = record(v, path);
+  const { config, warnings } = parseConfig({
+    ...DEFAULT_CONFIG,
+    training: record(e.hyperparams, `${path}.hyperparams`),
+  });
+  if (warnings.length > 0) fail(`${path} is invalid: ${warnings[0]}`);
+  return { epoch: int(e.epoch, `${path}.epoch`), hyperparams: config.training };
+}
+
+function checkpoint(v: unknown, version: number, config: PlaygroundConfig): Checkpoint {
   const c = record(v, 'checkpoint');
+  const log = c.hyperparamLog;
+  if (version >= 2 && !Array.isArray(log)) fail('checkpoint.hyperparamLog must be a list');
   const params = record(c.params, 'checkpoint.params');
   const rng = record(c.rng, 'checkpoint.rng');
   return {
@@ -159,6 +178,10 @@ function checkpoint(v: unknown): Checkpoint {
       dropout: rngState(rng.dropout, 'checkpoint.rng.dropout'),
     },
     order: uints(c.order, 'checkpoint.order'),
+    hyperparamLog:
+      version >= 2
+        ? (log as unknown[]).map((e, i) => hyperparamChange(e, `checkpoint.hyperparamLog[${i}]`))
+        : [{ epoch: 0, hyperparams: config.training }],
   };
 }
 
@@ -182,12 +205,12 @@ export function parseModelFile(text: string): ModelFile {
         `this version reads format ${MODEL_FILE_VERSION}.`,
     );
   }
-  if (d.version !== MODEL_FILE_VERSION) fail('The file’s format version is missing or invalid.');
+  if (d.version !== 1 && d.version !== 2) fail('The file’s format version is missing or invalid.');
 
   const { config, warnings } = parseConfig(d.config);
   if (warnings.length > 0) fail(`The saved settings are invalid: ${warnings[0]}.`);
 
-  const c = checkpoint(d.checkpoint);
+  const c = checkpoint(d.checkpoint, d.version as number, config);
   try {
     new TrainingSession({ ...toSessionConfig(config, c), gridSize: 1 });
   } catch (e) {

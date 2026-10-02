@@ -413,3 +413,58 @@ describe('dead ReLUs', () => {
     expect(watched.checkpoint()).toEqual(plain.checkpoint());
   });
 });
+
+describe('settings log', () => {
+  const base = config('circle', { gridSize: 4 });
+  const hp = (o: Partial<SessionConfig> = {}) => {
+    const { lr, batchSize, optimiser, l2, dropout } = { ...base, ...o };
+    return { lr, batchSize, optimiser, l2, dropout };
+  };
+  const log = (s: TrainingSession) => s.snapshot().hyperparamLog;
+
+  it('starts with the initial settings and logs only real changes', () => {
+    const s = new TrainingSession(base);
+    s.setHyperparams(hp()); // re-sent unchanged
+    expect(log(s)).toEqual([{ epoch: 0, hyperparams: hp() }]);
+    train(s, 3);
+    s.setHyperparams(hp({ lr: 0.1 }));
+    train(s, 2);
+    s.setHyperparams(hp({ lr: 0.1 }));
+    s.setHyperparams(hp({ lr: 0.1, optimiser: 'adam' }));
+    expect(log(s)).toEqual([
+      { epoch: 0, hyperparams: hp() },
+      { epoch: 3, hyperparams: hp({ lr: 0.1 }) },
+      { epoch: 5, hyperparams: hp({ lr: 0.1, optimiser: 'adam' }) },
+    ]);
+  });
+
+  it('within one epoch keeps only the last change, and a change back removes it', () => {
+    const s = new TrainingSession(base);
+    s.setHyperparams(hp({ lr: 1 })); // before training: the starting settings change
+    expect(log(s)).toEqual([{ epoch: 0, hyperparams: hp({ lr: 1 }) }]);
+    train(s, 2);
+    s.setHyperparams(hp({ lr: 3 }));
+    s.setHyperparams(hp({ lr: 0.3 }));
+    expect(log(s).at(-1)).toEqual({ epoch: 2, hyperparams: hp({ lr: 0.3 }) });
+    s.setHyperparams(hp({ lr: 1 }));
+    expect(log(s)).toEqual([{ epoch: 0, hyperparams: hp({ lr: 1 }) }]);
+  });
+
+  it('survives a checkpoint; resuming with other settings logs the change there', () => {
+    const s = train(new TrainingSession(base), 2);
+    s.setHyperparams(hp({ l2: 0.01 }));
+    train(s, 2);
+    const c = structuredClone(s.checkpoint());
+    expect(log(new TrainingSession({ ...base, l2: 0.01, resume: c }))).toEqual(log(s));
+    const changed = new TrainingSession({ ...base, l2: 0.01, dropout: 0.2, resume: c });
+    expect(log(changed).at(-1)).toEqual({ epoch: 4, hyperparams: hp({ l2: 0.01, dropout: 0.2 }) });
+  });
+
+  it('rejects a log that is out of order', () => {
+    const c = train(new TrainingSession(base), 2).checkpoint();
+    c.hyperparamLog = [{ epoch: 5, hyperparams: hp() }];
+    expect(() => new TrainingSession({ ...base, resume: c })).toThrow(
+      /settings log is out of order/,
+    );
+  });
+});

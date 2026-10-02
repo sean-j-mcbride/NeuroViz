@@ -57,7 +57,7 @@ describe('model files', () => {
 
   it('is readable: one array per line, short numbers', () => {
     const text = serialiseModelFile(CONFIG, trained(CONFIG, 1).checkpoint(), SAVED_AT);
-    expect(text).toMatch(/^\{\n {2}"format": "neuroviz-model",\n {2}"version": 1,/);
+    expect(text).toMatch(/^\{\n {2}"format": "neuroviz-model",\n {2}"version": 2,/);
     expect(text).toMatch(/\n {6}"0\.W": \[-?\d[^\n]*\],?\n/);
     expect(text.split('\n').length).toBeLessThan(100);
   });
@@ -83,7 +83,16 @@ describe('model files', () => {
     it.each([
       ['not JSON', 'hello', /not valid JSON/],
       ['another JSON file', { name: 'package' }, /not a saved NeuroViz model/],
-      ['a newer format', { ...good(), version: 2 }, /newer version of NeuroViz \(format 2\)/],
+      ['a newer format', { ...good(), version: 3 }, /newer version of NeuroViz \(format 3\)/],
+      [
+        'a settings log with settings the controls don’t offer',
+        (() => {
+          const d = good();
+          d.checkpoint!.hyperparamLog = [{ epoch: 0, hyperparams: { ...CONFIG.training, lr: 2 } }];
+          return d;
+        })(),
+        /hyperparamLog\[0\] is invalid: Ignored learning rate 2/,
+      ],
       [
         'settings the controls don’t offer',
         { ...good(), config: { ...CONFIG, seed: -5 } },
@@ -118,5 +127,28 @@ describe('model files', () => {
       expect(attempt(doc)).toThrow(ModelFileError);
       expect(attempt(doc)).toThrow(message);
     });
+  });
+
+  it('keeps the settings log, including mid-run changes', () => {
+    const s = trained(CONFIG, 3);
+    s.setHyperparams({ ...CONFIG.training, lr: 0.1 });
+    s.trainEpoch();
+    const back = parseModelFile(serialiseModelFile(CONFIG, s.checkpoint())).checkpoint;
+    expect(back.hyperparamLog).toEqual([
+      { epoch: 0, hyperparams: CONFIG.training },
+      { epoch: 3, hyperparams: { ...CONFIG.training, lr: 0.1 } },
+    ]);
+  });
+
+  it('still reads version 1 files, as if the settings never changed', () => {
+    const doc = JSON.parse(serialiseModelFile(CONFIG, trained(CONFIG, 2).checkpoint())) as {
+      version: number;
+      checkpoint: Record<string, unknown>;
+    };
+    doc.version = 1;
+    delete doc.checkpoint.hyperparamLog;
+    const { checkpoint } = parseModelFile(JSON.stringify(doc));
+    expect(checkpoint.epoch).toBe(2);
+    expect(checkpoint.hyperparamLog).toEqual([{ epoch: 0, hyperparams: CONFIG.training }]);
   });
 });

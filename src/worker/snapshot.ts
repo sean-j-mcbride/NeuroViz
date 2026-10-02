@@ -1,5 +1,6 @@
 import type { ParamHistorySnapshot, TimelineSnapshot } from './history';
 import type { Activation } from './network';
+import type { HyperparamChange } from './session';
 
 /** What a column of neurons in the network graph is. */
 export type ColumnKind = 'input' | Activation | 'output';
@@ -112,6 +113,8 @@ export interface Snapshot {
   timeline: TimelineSnapshot;
   /** Recent per-parameter values, for sparklines. */
   paramHistory: ParamHistorySnapshot;
+  /** The settings used over the run: epoch 0's, then each mid-run change. */
+  hyperparamLog: HyperparamChange[];
   /** Present when the snapshot was requested with a probe. */
   probe?: ProbeTrace;
 }

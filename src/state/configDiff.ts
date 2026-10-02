@@ -1,5 +1,7 @@
+import type { HyperparamChange, Hyperparams } from '../worker';
 import {
   DATASET_NAMES,
+  DEFAULT_CONFIG,
   OPTIMISER_NAMES,
   type PlaygroundConfig,
   describeBatchSize,
@@ -35,5 +37,27 @@ export function diffConfigs(a: PlaygroundConfig, b: PlaygroundConfig): ConfigCha
   return FIELDS.flatMap(([label, show]) => {
     const [from, to] = [show(a), show(b)];
     return from === to ? [] : [{ label, from, to }];
+  });
+}
+
+/** The hyperparameters that differ between two settings. */
+export function diffHyperparams(a: Hyperparams, b: Hyperparams): ConfigChange[] {
+  return diffConfigs({ ...DEFAULT_CONFIG, training: a }, { ...DEFAULT_CONFIG, training: b });
+}
+
+/** A mid-run change of settings: the epoch it applied from and what changed. */
+export interface RunChange {
+  epoch: number;
+  changes: ConfigChange[];
+  /** e.g. "Learning rate 3 → 0.03; Optimiser SGD → Adam". */
+  text: string;
+}
+
+/** Each change in a settings log after the starting settings. */
+export function changesDuringRun(log: readonly HyperparamChange[]): RunChange[] {
+  return log.slice(1).map((entry, i) => {
+    const changes = diffHyperparams(log[i]!.hyperparams, entry.hyperparams);
+    const text = changes.map((c) => `${c.label} ${c.from} → ${c.to}`).join('; ');
+    return { epoch: entry.epoch, changes, text };
   });
 }

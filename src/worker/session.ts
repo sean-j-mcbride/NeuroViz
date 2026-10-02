@@ -56,6 +56,19 @@ export interface Hyperparams {
   dropout: number;
 }
 
+/** The hyperparameters in force from `epoch` on (until the next change). */
+export interface HyperparamChange {
+  epoch: number;
+  hyperparams: Hyperparams;
+}
+
+function hyperparamsOf({ lr, batchSize, optimiser, l2, dropout }: Hyperparams): Hyperparams {
+  return { lr, batchSize, optimiser, l2, dropout };
+}
+
+const sameHyperparams = (a: Hyperparams, b: Hyperparams) =>
+  JSON.stringify(hyperparamsOf(a)) === JSON.stringify(hyperparamsOf(b));
+
 export interface SessionConfig extends Hyperparams {
   dataset: DatasetSpec;
   network: NetworkSpec;
@@ -175,6 +188,8 @@ export class TrainingSession {
   private readonly testLoss = new History();
   private readonly timeline: HistogramTimeline;
   private readonly paramHistory: ParamHistory;
+  /** Every hyperparameter setting used, starting with epoch 0's. */
+  private hyperparamLog: HyperparamChange[];
   private trainAccuracy = 0;
   private testAccuracy = 0;
   epoch = 0;
@@ -217,11 +232,12 @@ export class TrainingSession {
     this.shuffleRng = new Rng(seed + 1);
     this.order = range(this.train.x.rows);
     this.batchSize = this.resolveBatchSize(config.batchSize);
+    this.hyperparamLog = [{ epoch: 0, hyperparams: hyperparamsOf(config) }];
     this.timeline = new HistogramTimeline(this.dense.length);
     this.paramHistory = new ParamHistory(
       this.dense.map((d) => ({ W: d.W.value.size, b: d.b.value.size })),
     );
-    if (config.resume) this.restore(config.resume, config.optimiser);
+    if (config.resume) this.restore(config.resume, config);
     else this.recordMetrics();
   }
 
@@ -236,15 +252,26 @@ export class TrainingSession {
       optimiser: this.trainer.optimiser.saveState(this.model.params()),
       rng: { shuffle: this.shuffleRng.getState(), dropout: this.initRng.getState() },
       order: this.order.slice(),
+      hyperparamLog: this.hyperparamLogCopy(),
     };
+  }
+
+  private hyperparamLogCopy(): HyperparamChange[] {
+    return this.hyperparamLog.map(({ epoch, hyperparams }) => ({
+      epoch,
+      hyperparams: { ...hyperparams },
+    }));
   }
 
   /**
    * Picks up from a checkpoint. Optimiser state is restored only when it is
    * for the configured optimiser (otherwise that optimiser starts fresh, as
-   * when switching mid-run). Histograms and sparklines restart from here.
+   * when switching mid-run). Histograms and sparklines restart from here. The
+   * settings log continues; if the configured settings differ from the last
+   * ones logged, the change is logged at the checkpoint's epoch.
    */
-  private restore(c: Checkpoint, optimiser: Hyperparams['optimiser']): void {
+  private restore(c: Checkpoint, configured: Hyperparams): void {
+    const { optimiser } = configured;
     const n = this.train.x.rows;
     if (c.order.length !== n) {
       throw new Error(`Checkpoint is for ${c.order.length} training points, not ${n}`);
@@ -268,6 +295,20 @@ export class TrainingSession {
     this.step = c.step;
     this.trainLoss.load(c.trainLoss);
     this.testLoss.load(c.testLoss);
+    const log = c.hyperparamLog;
+    if (
+      log.length === 0 ||
+      log[0]!.epoch !== 0 ||
+      log.some((e, i) => i > 0 && e.epoch <= log[i - 1]!.epoch) ||
+      log.at(-1)!.epoch > c.epoch
+    ) {
+      throw new Error('Checkpoint settings log is out of order');
+    }
+    this.hyperparamLog = c.hyperparamLog.map(({ epoch, hyperparams }) => ({
+      epoch,
+      hyperparams: hyperparamsOf(hyperparams),
+    }));
+    this.logHyperparams(configured);
     this.trainAccuracy = this.evaluate(this.train).accuracy;
     this.testAccuracy = this.evaluate(this.test).accuracy;
     this.observe();
@@ -278,8 +319,27 @@ export class TrainingSession {
     return b === 'full' ? n : Math.max(1, Math.min(n, Math.floor(b)));
   }
 
+  /**
+   * Logs a change of settings at the current epoch. Unchanged settings (the UI
+   * re-sends them) log nothing; several changes within one epoch log only the
+   * last, and a change back to the previous settings removes the entry.
+   */
+  private logHyperparams(h: Hyperparams): void {
+    const log = this.hyperparamLog;
+    const last = log[log.length - 1]!;
+    if (sameHyperparams(last.hyperparams, h)) return;
+    if (last.epoch === this.epoch) {
+      log.pop(); // replaced (at epoch 0, the starting settings themselves change)
+      const before = log[log.length - 1];
+      if (before && sameHyperparams(before.hyperparams, h)) return;
+    }
+    log.push({ epoch: this.epoch, hyperparams: hyperparamsOf(h) });
+  }
+
   /** Applied from the next mini-batch on; does not reset training. */
-  setHyperparams({ lr, batchSize, optimiser, l2, dropout }: Hyperparams): void {
+  setHyperparams(hyperparams: Hyperparams): void {
+    this.logHyperparams(hyperparams);
+    const { lr, batchSize, optimiser, l2, dropout } = hyperparams;
     if (optimiser !== this.trainer.optimiser.kind) {
       this.trainer.optimiser = makeOptimiser(optimiser, lr);
     }
@@ -470,6 +530,7 @@ export class TrainingSession {
       l2: this.trainer.l2,
       timeline: this.timeline.snapshot(),
       paramHistory: this.paramHistory.snapshot(),
+      hyperparamLog: this.hyperparamLogCopy(),
       ...(probe && { probe }),
     };
   }

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { changesDuringRun } from '../state/configDiff';
 import { useAppStore } from '../state/store';
 import { DecisionBoundary, LossCurve, Stats } from '../viz';
 import { outputGrid } from '../worker';
@@ -11,6 +12,17 @@ export function OutputPanel() {
   const reference = useAppStore((s) => s.reference);
   const { setProbe, pinReference } = useAppStore.getState();
   const [logScale, setLogScale] = useState(false);
+  const log = snapshot?.hyperparamLog;
+  const changes = useMemo(() => log && changesDuringRun(log), [log]);
+  const referenceSeries = useMemo(
+    () =>
+      reference && {
+        train: reference.trainLoss,
+        test: reference.testLoss,
+        changes: changesDuringRun(reference.hyperparamLog),
+      },
+    [reference],
+  );
   if (!snapshot) return null;
 
   return (
@@ -53,8 +65,9 @@ export function OutputPanel() {
       <LossCurve
         train={snapshot.trainLoss}
         test={snapshot.testLoss}
+        changes={changes}
         logScale={logScale}
-        reference={reference && { train: reference.trainLoss, test: reference.testLoss }}
+        reference={referenceSeries}
       />
       <button
         type="button"

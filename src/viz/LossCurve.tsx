@@ -10,7 +10,12 @@ const PAD = { left: 44, right: 8, top: 8, bottom: 20 };
 export interface LossSeries {
   train: Float32Array;
   test: Float32Array;
+  /** Mid-run setting changes, marked with ticks on the x-axis. */
+  changes?: readonly { epoch: number; text: string }[];
 }
+
+/** How near (in pixels) the pointer must be to a change tick for the tooltip to describe it. */
+const TICK_REACH_PX = 4;
 
 interface LossCurveProps extends LossSeries {
   logScale: boolean;
@@ -41,7 +46,7 @@ function layout(width: number, epochs: number) {
  * pinned reference run. The x-axis spans the longer of the two runs. Hover
  * shows every value at that epoch.
  */
-export function LossCurve({ train, test, logScale, reference }: LossCurveProps) {
+export function LossCurve({ train, test, changes, logScale, reference }: LossCurveProps) {
   const wrap = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLCanvasElement>(null);
   const width = useElementWidth(wrap);
@@ -128,6 +133,21 @@ export function LossCurve({ train, test, logScale, reference }: LossCurveProps) 
     line(test, cssVar(canvas, '--test-line'), [4, 3]);
     line(train, cssVar(canvas, '--train-line'), []);
 
+    // Mid-run setting changes: short ticks up from the x-axis, in each run's colour.
+    const ticks = (list: LossSeries['changes'], colour: string, lift: number) => {
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = 2;
+      for (const { epoch } of list ?? []) {
+        const x = xOf(epoch);
+        ctx.beginPath();
+        ctx.moveTo(x, PAD.top + plotH - lift);
+        ctx.lineTo(x, PAD.top + plotH - lift - 6);
+        ctx.stroke();
+      }
+    };
+    ticks(reference?.changes, cssVar(canvas, '--reference-line'), 7);
+    ticks(changes, cssVar(canvas, '--train-line'), 0);
+
     if (clippedAbove !== null) {
       const label = `Clipped above ${formatTick(hi)} (peak ${formatTick(clippedAbove)})`;
       const [x, y] = [PAD.left + 4, PAD.top + 3];
@@ -140,7 +160,7 @@ export function LossCurve({ train, test, logScale, reference }: LossCurveProps) 
       ctx.fillStyle = muted;
       ctx.fillText(label, x, y);
     }
-  }, [train, test, reference, epochs, logScale, width, dark]);
+  }, [train, test, changes, reference, epochs, logScale, width, dark]);
 
   const onMove = (e: MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -156,6 +176,18 @@ export function LossCurve({ train, test, logScale, reference }: LossCurveProps) 
     if (reference) {
       rows.push(['Reference, train', at(reference.train)], ['Reference, test', at(reference.test)]);
     }
+    // Describe any change whose tick is within reach of the pointer.
+    const plotW = Math.max(1, width - PAD.left - PAD.right);
+    const reach = Math.round((TICK_REACH_PX * Math.max(0, epochs - 1)) / plotW);
+    const near = (list: LossSeries['changes'], who: string) => {
+      for (const c of list ?? []) {
+        if (Math.abs(c.epoch - hover.epoch) <= reach) {
+          rows.push([`${who}changed at epoch ${c.epoch}`, c.text]);
+        }
+      }
+    };
+    near(changes, reference ? 'This run: ' : 'Settings ');
+    near(reference?.changes, 'Reference: ');
   }
   const crosshairX = hover && width > 0 ? layout(width, epochs).xOf(hover.epoch) : null;
 

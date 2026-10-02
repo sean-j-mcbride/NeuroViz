@@ -980,6 +980,14 @@ button.close {
   margin-bottom: 2px;
 }
 
+.compare-subhead {
+  margin-top: 14px;
+}
+
+.compare-diff .hint {
+  margin-top: 4px;
+}
+
 .diff-label {
   color: var(--muted);
 }

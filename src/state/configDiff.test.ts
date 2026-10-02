@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from './config';
-import { diffConfigs } from './configDiff';
+import { changesDuringRun, diffConfigs } from './configDiff';
 import { PRESETS } from './presets';
 
 describe('diffConfigs', () => {
@@ -38,5 +38,22 @@ describe('diffConfigs', () => {
       'Batch size: 10 → Full batch',
       'Dropout: None → 20 %',
     ]);
+  });
+});
+
+describe('changesDuringRun', () => {
+  it('describes each change after the starting settings', () => {
+    const t = DEFAULT_CONFIG.training;
+    expect(
+      changesDuringRun([
+        { epoch: 0, hyperparams: t },
+        { epoch: 400, hyperparams: { ...t, lr: 3 } },
+        { epoch: 900, hyperparams: { ...t, lr: 0.03, optimiser: 'adam', dropout: 0.1 } },
+      ]).map(({ epoch, text }) => ({ epoch, text })),
+    ).toEqual([
+      { epoch: 400, text: 'Learning rate 0.03 → 3' },
+      { epoch: 900, text: 'Learning rate 3 → 0.03; Optimiser SGD → Adam; Dropout None → 10 %' },
+    ]);
+    expect(changesDuringRun([{ epoch: 0, hyperparams: t }])).toEqual([]);
   });
 });
