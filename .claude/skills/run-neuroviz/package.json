@@ -1,0 +1,9 @@
+{
+  "name": "run-neuroviz-driver",
+  "private": true,
+  "type": "module",
+  "description": "Headless-Chrome driver for the NeuroViz app (agent tooling, not part of the app).",
+  "dependencies": {
+    "playwright-core": "^1.63.0"
+  }
+}
