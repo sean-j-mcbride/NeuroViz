@@ -1,6 +1,7 @@
 import { type MouseEvent, useEffect, useRef, useState } from 'react';
 import { cssVar } from './canvas';
 import { useElementWidth, usePrefersDark } from './hooks';
+import { lossAxis } from './lossAxis';
 import { Tooltip } from './Tooltip';
 
 const HEIGHT = 150;
@@ -62,20 +63,13 @@ export function LossCurve({ train, test, logScale, reference }: LossCurveProps) 
     const { plotW, xOf } = layout(width, n);
     const plotH = HEIGHT - PAD.top - PAD.bottom;
     const all = reference ? [train, test, reference.train, reference.test] : [train, test];
-    let lo = Infinity;
-    let hi = -Infinity;
-    for (const series of all) {
-      for (const v of series) {
-        if (!Number.isFinite(v) || (logScale && v <= 0)) continue;
-        lo = Math.min(lo, v);
-        hi = Math.max(hi, v);
-      }
-    }
-    if (!Number.isFinite(lo)) return;
-    if (!logScale) lo = 0;
+    const axis = lossAxis(all, logScale);
+    if (!axis) return;
+    const { lo, hi, clippedAbove } = axis;
     const f = logScale ? Math.log10 : (v: number) => v;
     const [flo, fhi] = [f(lo), f(hi) === f(lo) ? f(lo) + 1 : f(hi)];
-    const yOf = (v: number) => PAD.top + plotH - ((f(v) - flo) / (fhi - flo)) * plotH;
+    // Values above a clipped top are drawn along it; the tooltip still shows them.
+    const yOf = (v: number) => PAD.top + plotH - ((f(Math.min(v, hi)) - flo) / (fhi - flo)) * plotH;
 
     const muted = cssVar(canvas, '--muted');
     const grid = cssVar(canvas, '--border');
@@ -133,6 +127,19 @@ export function LossCurve({ train, test, logScale, reference }: LossCurveProps) 
     }
     line(test, cssVar(canvas, '--test-line'), [4, 3]);
     line(train, cssVar(canvas, '--train-line'), []);
+
+    if (clippedAbove !== null) {
+      const label = `Clipped above ${formatTick(hi)} (peak ${formatTick(clippedAbove)})`;
+      const [x, y] = [PAD.left + 4, PAD.top + 3];
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = cssVar(canvas, '--surface');
+      ctx.fillRect(x - 3, y - 2, ctx.measureText(label).width + 6, 14);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = muted;
+      ctx.fillText(label, x, y);
+    }
   }, [train, test, reference, epochs, logScale, width, dark]);
 
   const onMove = (e: MouseEvent<HTMLCanvasElement>) => {
