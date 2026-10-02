@@ -1,5 +1,5 @@
 import { MAX_HIDDEN_LAYERS, MAX_UNITS, useAppStore } from '../state/store';
-import { NetworkGraph } from '../viz';
+import { NetworkGraph, StepThroughBar, columnLabel } from '../viz';
 import { ACTIVATIONS, type Activation, type HiddenLayerSpec } from '../worker';
 
 const ACTIVATION_NAMES: Record<Activation, string> = {
@@ -13,7 +13,16 @@ const ACTIVATION_NAMES: Record<Activation, string> = {
 export function ArchitectureBuilder() {
   const snapshot = useAppStore((s) => s.snapshot);
   const hidden = useAppStore((s) => s.config.network.hidden);
-  const setNetwork = useAppStore.getState().setNetwork;
+  const stepThrough = useAppStore((s) => s.stepThrough);
+  const { setNetwork, setStepThroughOpen, setStage } = useAppStore.getState();
+  const graphReady = snapshot && snapshot.columns.length === hidden.length + 2;
+  // The snapshot's trace, once it matches the picked point.
+  const probe =
+    stepThrough?.probe &&
+    snapshot?.probe?.ref.set === stepThrough.probe.set &&
+    snapshot.probe.ref.index === stepThrough.probe.index
+      ? snapshot.probe
+      : null;
 
   const update = (next: HiddenLayerSpec[]) => setNetwork({ hidden: next });
   const patchLayer = (i: number, patch: Partial<HiddenLayerSpec>) =>
@@ -46,11 +55,31 @@ export function ArchitectureBuilder() {
             +
           </button>
         </div>
+        <button
+          type="button"
+          className={stepThrough ? 'toggle on' : 'toggle'}
+          aria-pressed={stepThrough !== null}
+          onClick={() => setStepThroughOpen(stepThrough === null)}
+          title="Pause and trace one data point forward and backward through the network"
+        >
+          Step through
+        </button>
       </div>
 
-      {snapshot && snapshot.columns.length === hidden.length + 2 && (
+      {stepThrough && graphReady && (
+        <StepThroughBar
+          probe={probe}
+          columnNames={snapshot.columns.map(columnLabel)}
+          stage={stepThrough.stage}
+          onStage={setStage}
+          onClose={() => setStepThroughOpen(false)}
+        />
+      )}
+
+      {graphReady && (
         <NetworkGraph
           snapshot={snapshot}
+          trace={probe && stepThrough ? { probe, stage: stepThrough.stage } : null}
           renderHeader={(column, kind) => {
             if (kind === 'input' || kind === 'output') return null;
             const i = column - 1;
@@ -95,7 +124,8 @@ export function ArchitectureBuilder() {
 
       <p className="hint">
         Each neuron shows what it computes across the input plane. Edge thickness is the size of a
-        weight; colour is its sign (blue positive, orange negative). Hover for values.
+        weight; colour is its sign (blue positive, orange negative). Hover a neuron or edge for its
+        values, gradients and recent history.
       </p>
     </section>
   );

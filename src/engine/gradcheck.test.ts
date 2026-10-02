@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { assertGradsOk, checkLayer, checkLoss, checkModel } from './gradcheck';
+import {
+  assertGradsOk,
+  checkLayer,
+  checkLoss,
+  checkModel,
+  compareGrads,
+  numericalGrad,
+} from './gradcheck';
 import { ReLU, Sigmoid, Tanh } from './layers/activations';
 import { Dense } from './layers/dense';
+import { Dropout } from './layers/dropout';
 import type { Layer } from './layers/types';
 import { BCEWithLogitsLoss, MSELoss, SoftmaxCrossEntropyLoss } from './losses';
 import { Rng } from './random';
+import { addL2, isWeight } from './regularise';
 import { Sequential } from './sequential';
 import { Tensor } from './tensor';
 
@@ -30,6 +39,15 @@ describe('layer gradient checks', () => {
     for (const p of layer.params())
       if (p.name === 'b') p.value.data.set(Tensor.randn(p.value.shape, rng).data);
     const x = Tensor.randn([BATCH, inFeatures], rng);
+    assertGradsOk(checkLayer(layer, x, rng));
+  });
+
+  it('dropout (mask frozen so every forward uses the same one)', () => {
+    const rng = new Rng(9);
+    const layer = new Dropout(0.4, rng);
+    const x = Tensor.randn([BATCH, 4], rng);
+    layer.forward(x, true);
+    layer.freezeMask = true;
     assertGradsOk(checkLayer(layer, x, rng));
   });
 
@@ -121,6 +139,50 @@ describe('model gradient checks (end to end)', () => {
     assertGradsOk(
       checkModel(model, new SoftmaxCrossEntropyLoss(), Tensor.randn([BATCH, 3], rng), y, MODEL_TOL),
     );
+  });
+});
+
+describe('L2 regularisation', () => {
+  it('gradient of loss + (λ/2)·Σ‖W‖² matches central differences; biases untouched', () => {
+    const rng = new Rng(10);
+    const lambda = 0.3;
+    const model = new Sequential([
+      new Dense(2, 4, { init: 'xavier', rng }),
+      new Tanh(),
+      new Dense(4, 1, { init: 'xavier', rng }),
+    ]);
+    for (const p of model.params()) p.value.data.set(Tensor.randn(p.value.shape, rng).data);
+    const x = Tensor.randn([BATCH, 2], rng);
+    const y = Tensor.from([[0], [1], [1], [0], [1]]);
+    const loss = new BCEWithLogitsLoss();
+    const penalty = () => {
+      let s = 0;
+      for (const p of model.params()) if (isWeight(p)) for (const w of p.value.data) s += w * w;
+      return 0.5 * lambda * s;
+    };
+    const objective = () => loss.forward(model.forward(x, true), y) + penalty();
+
+    loss.forward(model.forward(x, true), y);
+    model.backward(loss.backward());
+    const params = model.params();
+    const plainBiasGrads = params.filter((p) => !isWeight(p)).map((p) => p.grad.data.slice());
+    expect(addL2(params, lambda)).toBeCloseTo(penalty(), 5);
+    const analytic = params.map((p) => ({ ...p, analytic: p.grad.data.slice() }));
+
+    expect(analytic.filter((p) => !isWeight(p)).map((p) => p.analytic)).toEqual(plainBiasGrads);
+    assertGradsOk(
+      analytic.map((p) =>
+        compareGrads(p.name, p.analytic, numericalGrad(objective, p.value), MODEL_TOL.tol),
+      ),
+    );
+  });
+
+  it('λ = 0 leaves gradients alone and costs nothing', () => {
+    const rng = new Rng(11);
+    const d = new Dense(2, 2, { init: 'xavier', rng });
+    d.W.grad.data.set([1, 2, 3, 4]);
+    expect(addL2(d.params(), 0)).toBe(0);
+    expect(Array.from(d.W.grad.data)).toEqual([1, 2, 3, 4]);
   });
 });
 

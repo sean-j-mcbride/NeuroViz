@@ -1,3 +1,4 @@
+import type { ParamHistorySnapshot, TimelineSnapshot } from './history';
 import type { Activation } from './network';
 
 /** What a column of neurons in the network graph is. */
@@ -20,6 +21,12 @@ export interface DenseWeights {
   /** Row-major `[inFeatures, outFeatures]`: weight from input i to unit j is `W[i·out + j]`. */
   W: Float32Array;
   b: Float32Array;
+  /**
+   * ∂(loss + L2 penalty)/∂W over the full training set (evaluation mode, so no
+   * dropout): the gradient the optimiser would see from a full batch. Same layout as W.
+   */
+  gradW: Float32Array;
+  gradB: Float32Array;
 }
 
 export interface PointSet {
@@ -29,10 +36,52 @@ export interface PointSet {
   y: Float32Array;
 }
 
+/** Fixed for the life of a session; sent to the UI once. */
+export interface SessionData {
+  train: PointSet;
+  test: PointSet;
+}
+
+/** Identifies one data point to trace through the network. */
+export interface ProbeRef {
+  set: 'train' | 'test';
+  index: number;
+}
+
+/**
+ * One column's values for the probe input. For hidden columns z is the
+ * pre-activation and a the activation (equal for linear layers). For the input
+ * column z = a = x. For the output column z is the logit and a = σ(z).
+ */
+export interface ProbeColumn {
+  z: Float32Array;
+  a: Float32Array;
+  /** ∂L/∂z. For the output this is p − y. */
+  dZ: Float32Array;
+  /** ∂L/∂a. For the output, ∂L/∂p (p clamped away from 0 and 1). */
+  dA: Float32Array;
+}
+
+/** A single example's forward and backward pass (evaluation mode, data loss only). */
+export interface ProbeTrace {
+  ref: ProbeRef;
+  /** The input point (x₁, x₂). */
+  x: Float32Array;
+  label: number;
+  /** σ(logit): the predicted probability of label 1. */
+  p: number;
+  /** Binary cross-entropy for this example. */
+  loss: number;
+  /** Aligned with `Snapshot.columns`. */
+  columns: ProbeColumn[];
+  /** Per dense layer, ∂L/∂W for this example (= a_prevᵀ · dZ); layout as `DenseWeights.W`. */
+  dW: Float32Array[];
+}
+
 /**
  * Everything the UI needs to draw one moment of training. Plain data and typed
  * arrays only, so it is structured-cloneable (and can cross a Worker boundary).
- * Every array is a copy: the UI may keep it after the session moves on.
+ * Every array is a fresh copy: the UI may keep it, and the worker may transfer it.
  */
 export interface Snapshot {
   epoch: number;
@@ -51,6 +100,29 @@ export interface Snapshot {
   columns: NeuronColumn[];
   /** One per dense layer: `weights[k]` connects `columns[k]` to `columns[k + 1]`. */
   weights: DenseWeights[];
-  train: PointSet;
-  test: PointSet;
+  /** Weight / gradient histograms and RMS per dense layer over the whole run. */
+  timeline: TimelineSnapshot;
+  /** Recent per-parameter values, for sparklines. */
+  paramHistory: ParamHistorySnapshot;
+  /** Present when the snapshot was requested with a probe. */
+  probe?: ProbeTrace;
+}
+
+/** Every typed-array buffer in a snapshot, for a zero-copy `postMessage` transfer list. */
+export function snapshotBuffers(s: Snapshot): ArrayBuffer[] {
+  const arrays: Float32Array[] = [
+    s.trainLoss,
+    s.testLoss,
+    s.timeline.epochs,
+    s.paramHistory.epochs,
+  ];
+  for (const c of s.columns) arrays.push(c.values);
+  for (const w of s.weights) arrays.push(w.W, w.b, w.gradW, w.gradB);
+  for (const l of s.timeline.layers) arrays.push(l.weightHist, l.gradHist, l.weightRms, l.gradRms);
+  for (const l of s.paramHistory.layers) arrays.push(l.W, l.b);
+  if (s.probe) {
+    arrays.push(s.probe.x, ...s.probe.dW);
+    for (const c of s.probe.columns) arrays.push(c.z, c.a, c.dZ, c.dA);
+  }
+  return [...new Set(arrays.map((a) => a.buffer as ArrayBuffer))];
 }

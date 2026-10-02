@@ -16,6 +16,9 @@ function config(kind: Toy2DKind, overrides: Partial<SessionConfig> = {}): Sessio
     network: TANH_8_8,
     lr: 0.03,
     batchSize: 10,
+    optimiser: 'sgd',
+    l2: 0,
+    dropout: 0,
     seed: 1,
     ...overrides,
   };
@@ -75,8 +78,9 @@ describe('TrainingSession', () => {
     // Output is a probability; ReLU outputs are non-negative.
     expect(Array.from(snap.columns[4]!.values).every((p) => p > 0 && p < 1)).toBe(true);
     expect(Array.from(snap.columns[1]!.values).every((v) => v >= 0)).toBe(true);
-    expect(snap.train.x).toHaveLength(280 * 2);
-    expect(snap.test.y).toHaveLength(120);
+    const data = s.data();
+    expect(data.train.x).toHaveLength(280 * 2);
+    expect(data.test.y).toHaveLength(120);
   });
 
   it('lays the grid out with row 0 at the top', () => {
@@ -91,7 +95,7 @@ describe('TrainingSession', () => {
 
   it('applies new hyperparameters without resetting', () => {
     const s = train(new TrainingSession(config('gaussians')), 2);
-    s.setHyperparams({ lr: 0.1, batchSize: 'full' });
+    s.setHyperparams({ lr: 0.1, batchSize: 'full', optimiser: 'sgd', l2: 0, dropout: 0 });
     train(s, 1);
     const snap = s.snapshot();
     expect(snap.epoch).toBe(3);
@@ -132,5 +136,156 @@ describe('learning (seeded, lr 0.03, batch size 10)', () => {
     const network: NetworkSpec = { hidden: [{ units: 8, activation: 'linear' }] };
     const snap = train(new TrainingSession(config('xor', { network })), 200).snapshot();
     expect(snap.trainAccuracy).toBeLessThan(0.8);
+  });
+});
+
+describe('observing training', () => {
+  const busy = (): SessionConfig =>
+    config('spirals', { optimiser: 'adam', lr: 0.01, dropout: 0.2, l2: 1e-3 });
+
+  it('snapshots and probes never change the trajectory', () => {
+    const a = new TrainingSession(busy());
+    const b = new TrainingSession(busy());
+    for (let e = 0; e < 15; e++) {
+      a.trainEpoch();
+      a.snapshot({ probe: { set: 'train', index: e } });
+      b.trainEpoch();
+    }
+    const [sa, sb] = [a.snapshot(), b.snapshot()];
+    expect(sa.weights).toEqual(sb.weights);
+    expect(sa.trainLoss).toEqual(sb.trainLoss);
+  });
+
+  it('records a bounded, evenly spaced timeline of histograms', () => {
+    const s = train(new TrainingSession(config('circle', { gridSize: 4 })), 300);
+    const { timeline } = s.snapshot();
+    const epochs = Array.from(timeline.epochs);
+    expect(epochs.length).toBeLessThanOrEqual(128);
+    expect(epochs[0]).toBe(0);
+    const step = epochs[1]! - epochs[0]!;
+    expect(step).toBe(4); // 300 epochs > 2·128 → interval 4
+    epochs.forEach((e, t) => expect(e).toBe(t * step));
+    expect(timeline.layers).toHaveLength(3);
+    const l = timeline.layers[0]!;
+    for (let t = 0; t < epochs.length; t++) {
+      const col = l.gradHist.subarray(t * 32, (t + 1) * 32);
+      expect(col.reduce((x, y) => x + y, 0)).toBeCloseTo(1, 5);
+    }
+  });
+
+  it('keeps the last 100 epochs of every parameter, ending at the current weights', () => {
+    const s = train(new TrainingSession(config('xor', { gridSize: 4 })), 120);
+    const { paramHistory, weights } = s.snapshot();
+    const n = paramHistory.epochs.length;
+    expect(n).toBe(100);
+    expect(paramHistory.epochs[0]).toBe(21);
+    expect(paramHistory.epochs[n - 1]).toBe(120);
+    const w = weights[1]!;
+    const h = paramHistory.layers[1]!;
+    for (let j = 0; j < w.W.length; j++) expect(h.W[j * n + n - 1]).toBe(w.W[j]);
+    for (let j = 0; j < w.b.length; j++) expect(h.b[j * n + n - 1]).toBe(w.b[j]);
+  });
+});
+
+describe('hyperparameters apply live', () => {
+  it('optimiser, L2 and dropout all change the run without resetting it', () => {
+    const base = () => train(new TrainingSession(config('circle', { gridSize: 4 })), 5);
+    const ref = train(base(), 5).snapshot();
+    const variants = [
+      { optimiser: 'adam' as const },
+      { optimiser: 'momentum' as const },
+      { l2: 0.1 },
+      { dropout: 0.3 },
+    ];
+    for (const v of variants) {
+      const s = base();
+      s.setHyperparams({ lr: 0.03, batchSize: 10, optimiser: 'sgd', l2: 0, dropout: 0, ...v });
+      const snap = train(s, 5).snapshot();
+      expect(snap.epoch).toBe(10);
+      expect(snap.weights).not.toEqual(ref.weights);
+    }
+  });
+
+  it('L2 shrinks the weights', () => {
+    const norm = (l2: number) => {
+      const snap = train(new TrainingSession(config('circle', { l2, gridSize: 4 })), 50).snapshot();
+      return snap.weights.reduce((t, w) => t + w.W.reduce((u, x) => u + x * x, 0), 0);
+    };
+    expect(norm(0.03)).toBeLessThan(0.7 * norm(0));
+  });
+});
+
+describe('probe', () => {
+  const s = train(new TrainingSession(config('circle', { gridSize: 4 })), 10);
+
+  it('traces one point forward and backward consistently', () => {
+    const t = s.snapshot({ probe: { set: 'test', index: 3 } }).probe!;
+    expect(t.ref).toEqual({ set: 'test', index: 3 });
+    expect(Array.from(t.x)).toEqual(Array.from(s.test.x.data.subarray(6, 8)));
+    expect(t.columns.map((c) => c.a.length)).toEqual([2, 8, 8, 1]);
+    const out = t.columns[3]!;
+    expect(out.a[0]).toBeCloseTo(t.p, 6);
+    expect(out.dZ[0]).toBeCloseTo(t.p - t.label, 6);
+    expect(t.loss).toBeCloseTo(-Math.log(t.label === 1 ? t.p : 1 - t.p), 4);
+    // tanh: a = tanh(z) and dZ = dA·(1 − a²).
+    const h = t.columns[1]!;
+    for (let u = 0; u < 8; u++) {
+      expect(h.a[u]).toBeCloseTo(Math.tanh(h.z[u]!), 6);
+      expect(h.dZ[u]).toBeCloseTo(h.dA[u]! * (1 - h.a[u]! ** 2), 6);
+    }
+    // dW = a_prevᵀ · dZ.
+    t.dW.forEach((dW, k) => {
+      const [prev, next] = [t.columns[k]!.a, t.columns[k + 1]!.dZ];
+      for (let i = 0; i < prev.length; i++)
+        for (let j = 0; j < next.length; j++)
+          expect(dW[i * next.length + j]).toBeCloseTo(prev[i]! * next[j]!, 6);
+    });
+  });
+
+  it('per-example gradients average to the full-batch gradient', () => {
+    const snap = s.snapshot();
+    const n = s.train.x.rows;
+    const mean = snap.weights.map((w) => new Float64Array(w.W.length));
+    for (let i = 0; i < n; i++) {
+      s.probe({ set: 'train', index: i })!.dW.forEach((dW, k) => {
+        for (let j = 0; j < dW.length; j++) mean[k]![j]! += dW[j]! / n;
+      });
+    }
+    snap.weights.forEach((w, k) => {
+      for (let j = 0; j < w.gradW.length; j++) expect(mean[k]![j]).toBeCloseTo(w.gradW[j]!, 5);
+    });
+  });
+
+  it('rejects out-of-range indices', () => {
+    expect(s.probe({ set: 'train', index: 280 })).toBeUndefined();
+    expect(s.snapshot({ probe: { set: 'test', index: -1 } }).probe).toBeUndefined();
+  });
+});
+
+describe('deep sigmoid vs deep ReLU (the Phase 3 demonstration)', () => {
+  const deep = (activation: 'sigmoid' | 'relu') =>
+    new TrainingSession(
+      config('circle', {
+        dataset: { kind: 'circle', n: 400, noise: 0.1, seed: 1 },
+        network: { hidden: Array.from({ length: 6 }, () => ({ units: 8, activation })) },
+        gridSize: 4,
+      }),
+    );
+  /** First-layer gradient RMS over output-layer gradient RMS at epoch 0. */
+  const ratio = (s: TrainingSession) => {
+    const layers = s.snapshot().timeline.layers;
+    return layers[0]!.gradRms[0]! / layers.at(-1)!.gradRms[0]!;
+  };
+
+  it('sigmoid starves the early layers of gradient; ReLU does not', () => {
+    // Measured (seeds 1–3): sigmoid 6e-5 – 3e-4, ReLU 0.07 – 0.1.
+    expect(ratio(deep('sigmoid'))).toBeLessThan(1e-3);
+    expect(ratio(deep('relu'))).toBeGreaterThan(0.03);
+  });
+
+  it('so ReLU learns the circle quickly while sigmoid barely moves', () => {
+    // Measured: ReLU reaches 90 % in 9 epochs; sigmoid not within 600.
+    expect(train(deep('relu'), 40).snapshot().trainAccuracy).toBeGreaterThanOrEqual(0.9);
+    expect(train(deep('sigmoid'), 200).snapshot().trainAccuracy).toBeLessThan(0.75);
   });
 });

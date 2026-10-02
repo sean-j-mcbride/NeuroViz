@@ -1,5 +1,7 @@
-// Training session: runs the engine and produces Snapshots for the UI.
-// Driven from the main thread in Phase 2; wrapped in a Web Worker in Phase 3.
+// Training session (runs the engine, produces Snapshots) and the Web Worker
+// protocol that drives it from the UI.
+export * from './history';
 export * from './network';
+export * from './protocol';
 export * from './session';
-export type * from './snapshot';
+export * from './snapshot';

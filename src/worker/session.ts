@@ -1,12 +1,15 @@
 import {
   BCEWithLogitsLoss,
   Dense,
+  Dropout,
+  type OptimiserKind,
   Rng,
-  SGD,
   Sequential,
   Tensor,
   Trainer,
+  addL2,
   layerFromConfig,
+  makeOptimiser,
 } from '../engine';
 import {
   DOMAIN,
@@ -18,8 +21,16 @@ import {
   shuffleInPlace,
   splitTrainTest,
 } from '../data';
+import { HistogramTimeline, ParamHistory } from './history';
 import { INPUTS, type NetworkSpec, networkToLayerConfig } from './network';
-import type { NeuronColumn, Snapshot } from './snapshot';
+import type {
+  NeuronColumn,
+  ProbeColumn,
+  ProbeRef,
+  ProbeTrace,
+  SessionData,
+  Snapshot,
+} from './snapshot';
 
 export interface DatasetSpec {
   kind: Toy2DKind;
@@ -28,16 +39,23 @@ export interface DatasetSpec {
   seed: number;
 }
 
+/** Everything that may change mid-run without resetting training. */
 export interface Hyperparams {
   lr: number;
   /** Mini-batch size; 'full' (or anything ≥ the training set) means full-batch. */
   batchSize: number | 'full';
+  /** Switching optimiser starts it with fresh state (zero momentum / moments). */
+  optimiser: OptimiserKind;
+  /** L2 regularisation strength λ on the weights (not biases). */
+  l2: number;
+  /** Dropout rate after every hidden layer, in [0, 1). */
+  dropout: number;
 }
 
 export interface SessionConfig extends Hyperparams {
   dataset: DatasetSpec;
   network: NetworkSpec;
-  /** Seeds weight initialisation and per-epoch shuffling. */
+  /** Seeds weight initialisation, per-epoch shuffling and dropout masks. */
   seed: number;
   /** Fraction of the dataset held out for testing. Default 0.3. */
   testFraction?: number;
@@ -69,8 +87,12 @@ function toNeuronMajor(h: Tensor): Float32Array {
   return out;
 }
 
+function sigmoid(z: number): number {
+  return 1 / (1 + Math.exp(-z));
+}
+
 function sigmoidInPlace(a: Float32Array): Float32Array {
-  for (let i = 0; i < a.length; i++) a[i] = 1 / (1 + Math.exp(-a[i]!));
+  for (let i = 0; i < a.length; i++) a[i] = sigmoid(a[i]!);
   return a;
 }
 
@@ -94,8 +116,11 @@ class History {
 }
 
 /**
- * One training run of an MLP on a 2D toy dataset: SGD on BCE-with-logits.
- * DOM-free, so it can run on the main thread or, unchanged, in a Worker.
+ * One training run of an MLP on a 2D toy dataset with BCE-with-logits.
+ * DOM-free, so it runs unchanged in a Worker (or in tests).
+ *
+ * Only `trainEpoch` changes the model or consumes randomness; `snapshot` and
+ * its probe run in evaluation mode, so observing a run never changes it.
  */
 export class TrainingSession {
   readonly train: Dataset;
@@ -103,10 +128,15 @@ export class TrainingSession {
   readonly gridSize: number;
   private readonly network: NetworkSpec;
   private readonly model: Sequential;
+  private readonly dense: Dense[];
+  private readonly dropouts: Dropout[];
   private readonly trainer: Trainer;
-  private readonly optimiser: SGD;
-  /** Index into model.layers of the last layer of each column after the input. */
-  private readonly columnEnds: number[];
+  /**
+   * For each column after the input: the index into model.layers of its dense
+   * layer and of the layer whose output is the column's value (the layer
+   * before the next dense, or the last layer).
+   */
+  private readonly columnLayers: { dense: number; end: number }[];
   private readonly shuffleRng: Rng;
   private readonly order: Uint32Array;
   private readonly grid: Tensor;
@@ -115,6 +145,8 @@ export class TrainingSession {
   private batch: { x: Tensor; y: Tensor } | null = null;
   private readonly trainLoss = new History();
   private readonly testLoss = new History();
+  private readonly timeline: HistogramTimeline;
+  private readonly paramHistory: ParamHistory;
   private trainAccuracy = 0;
   private testAccuracy = 0;
   epoch = 0;
@@ -132,22 +164,34 @@ export class TrainingSession {
     this.gridSize = gridSize;
     this.grid = makeGrid(gridSize);
 
+    // Dropout layers share the init rng for their masks; they draw nothing until training.
     const rng = new Rng(seed);
-    const model = layerFromConfig(networkToLayerConfig(network), rng);
+    const model = layerFromConfig(networkToLayerConfig(network, config.dropout), rng);
     if (!(model instanceof Sequential)) throw new Error('TrainingSession: expected a Sequential');
     this.model = model;
-    this.columnEnds = [];
+    this.dense = model.layers.filter((l): l is Dense => l instanceof Dense);
+    this.dropouts = model.layers.filter((l): l is Dropout => l instanceof Dropout);
+    this.columnLayers = [];
     model.layers.forEach((layer, i) => {
-      const next = model.layers[i + 1];
-      // A column ends at a dense layer with no activation after it, or at an activation.
-      if (!(layer instanceof Dense) || !next || next instanceof Dense) this.columnEnds.push(i);
+      if (!(layer instanceof Dense)) return;
+      let end = i;
+      while (end + 1 < model.layers.length && !(model.layers[end + 1] instanceof Dense)) end++;
+      this.columnLayers.push({ dense: i, end });
     });
 
-    this.optimiser = new SGD(config.lr);
-    this.trainer = new Trainer({ model, loss: new BCEWithLogitsLoss(), optimiser: this.optimiser });
+    this.trainer = new Trainer({
+      model,
+      loss: new BCEWithLogitsLoss(),
+      optimiser: makeOptimiser(config.optimiser, config.lr),
+      l2: config.l2,
+    });
     this.shuffleRng = new Rng(seed + 1);
     this.order = range(this.train.x.rows);
     this.batchSize = this.resolveBatchSize(config.batchSize);
+    this.timeline = new HistogramTimeline(this.dense.length);
+    this.paramHistory = new ParamHistory(
+      this.dense.map((d) => ({ W: d.W.value.size, b: d.b.value.size })),
+    );
     this.recordMetrics();
   }
 
@@ -157,8 +201,13 @@ export class TrainingSession {
   }
 
   /** Applied from the next mini-batch on; does not reset training. */
-  setHyperparams({ lr, batchSize }: Hyperparams): void {
-    this.optimiser.lr = lr;
+  setHyperparams({ lr, batchSize, optimiser, l2, dropout }: Hyperparams): void {
+    if (optimiser !== this.trainer.optimiser.kind) {
+      this.trainer.optimiser = makeOptimiser(optimiser, lr);
+    }
+    this.trainer.optimiser.lr = lr;
+    this.trainer.l2 = l2;
+    for (const d of this.dropouts) d.rate = dropout;
     this.batchSize = this.resolveBatchSize(batchSize);
   }
 
@@ -199,9 +248,92 @@ export class TrainingSession {
     this.testLoss.push(te.loss);
     this.trainAccuracy = tr.accuracy;
     this.testAccuracy = te.accuracy;
+    this.paramHistory.record(
+      this.epoch,
+      this.dense.map((d) => ({ W: d.W.value.data, b: d.b.value.data })),
+    );
+    if (this.timeline.due(this.epoch)) {
+      this.measureGradients();
+      this.timeline.record(
+        this.epoch,
+        this.dense.map((d) => ({ W: d.W.value.data, gradW: d.W.grad.data })),
+      );
+    }
   }
 
-  snapshot(): Snapshot {
+  /**
+   * Full-batch gradient of (data loss + L2 penalty) over the training set in
+   * evaluation mode, left in each param's `grad`. Safe between steps: the next
+   * `trainStep` overwrites every gradient before the optimiser reads it.
+   */
+  private measureGradients(): void {
+    const logits = this.model.forward(this.train.x, false);
+    this.evalLoss.forward(logits, this.train.y);
+    this.model.backward(this.evalLoss.backward());
+    addL2(this.model.params(), this.trainer.l2);
+  }
+
+  /** The point sets; fixed for the life of the session. */
+  data(): SessionData {
+    return {
+      train: { x: this.train.x.data.slice(), y: this.train.y.data.slice() },
+      test: { x: this.test.x.data.slice(), y: this.test.y.data.slice() },
+    };
+  }
+
+  /** Traces one data point forward and backward (evaluation mode, data loss only). */
+  probe(ref: ProbeRef): ProbeTrace | undefined {
+    const set = ref.set === 'train' ? this.train : this.test;
+    if (!Number.isInteger(ref.index) || ref.index < 0 || ref.index >= set.x.rows) return undefined;
+    const x = new Tensor(set.x.data.slice(2 * ref.index, 2 * ref.index + 2), [1, INPUTS]);
+    const label = set.y.data[ref.index]!;
+
+    const { layers } = this.model;
+    const outputs: Float32Array[] = [];
+    let h = x;
+    for (const layer of layers) {
+      h = layer.forward(h, false);
+      outputs.push(h.data.slice());
+    }
+    const logit = h.data[0]!;
+    const p = sigmoid(logit);
+    const loss = this.evalLoss.forward(h, new Tensor(Float32Array.of(label), [1, 1]));
+
+    // gradOut[i] = ∂L/∂(output of layer i).
+    const gradOut: Float32Array[] = new Array<Float32Array>(layers.length);
+    let g = this.evalLoss.backward();
+    for (let i = layers.length - 1; i >= 0; i--) {
+      gradOut[i] = g.data.slice();
+      g = layers[i]!.backward(g);
+    }
+    const dW = this.dense.map((d) => d.W.grad.data.slice());
+
+    const columns: ProbeColumn[] = [
+      { z: x.data.slice(), a: x.data.slice(), dZ: g.data.slice(), dA: g.data.slice() },
+    ];
+    this.columnLayers.forEach(({ dense, end }, c) => {
+      const isOutput = c === this.columnLayers.length - 1;
+      if (!isOutput) {
+        columns.push({
+          z: outputs[dense]!,
+          a: outputs[end]!,
+          dZ: gradOut[dense]!,
+          dA: gradOut[end]!,
+        });
+        return;
+      }
+      const pc = Math.min(Math.max(p, 1e-7), 1 - 1e-7);
+      columns.push({
+        z: Float32Array.of(logit),
+        a: Float32Array.of(p),
+        dZ: Float32Array.of(p - label),
+        dA: Float32Array.of((pc - label) / (pc * (1 - pc))),
+      });
+    });
+    return { ref, x: x.data.slice(), label, p, loss, columns, dW };
+  }
+
+  snapshot(opts: { probe?: ProbeRef } = {}): Snapshot {
     const columns: NeuronColumn[] = [
       { kind: 'input', units: INPUTS, values: toNeuronMajor(this.grid) },
     ];
@@ -209,7 +341,7 @@ export class TrainingSession {
     let col = 0;
     this.model.layers.forEach((layer, i) => {
       h = layer.forward(h, false);
-      if (i !== this.columnEnds[col]) return;
+      if (i !== this.columnLayers[col]?.end) return;
       const hidden = this.network.hidden[col];
       const values = toNeuronMajor(h);
       columns.push(
@@ -220,14 +352,16 @@ export class TrainingSession {
       col++;
     });
 
-    const weights = this.model.layers
-      .filter((l): l is Dense => l instanceof Dense)
-      .map((d) => ({
-        inFeatures: d.inFeatures,
-        outFeatures: d.outFeatures,
-        W: d.W.value.data.slice(),
-        b: d.b.value.data.slice(),
-      }));
+    this.measureGradients();
+    const weights = this.dense.map((d) => ({
+      inFeatures: d.inFeatures,
+      outFeatures: d.outFeatures,
+      W: d.W.value.data.slice(),
+      b: d.b.value.data.slice(),
+      gradW: d.W.grad.data.slice(),
+      gradB: d.b.grad.data.slice(),
+    }));
+    const probe = opts.probe && this.probe(opts.probe);
 
     return {
       epoch: this.epoch,
@@ -240,8 +374,9 @@ export class TrainingSession {
       gridSize: this.gridSize,
       columns,
       weights,
-      train: { x: this.train.x.data.slice(), y: this.train.y.data.slice() },
-      test: { x: this.test.x.data.slice(), y: this.test.y.data.slice() },
+      timeline: this.timeline.snapshot(),
+      paramHistory: this.paramHistory.snapshot(),
+      ...(probe && { probe }),
     };
   }
 }

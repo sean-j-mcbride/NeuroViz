@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { cssVar } from './canvas';
 import { useElementWidth, usePrefersDark } from './hooks';
 
 const HEIGHT = 150;
@@ -8,10 +9,6 @@ interface LossCurveProps {
   train: Float32Array;
   test: Float32Array;
   logScale: boolean;
-}
-
-function cssVar(el: Element, name: string): string {
-  return getComputedStyle(el).getPropertyValue(name).trim();
 }
 
 function formatTick(v: number): string {

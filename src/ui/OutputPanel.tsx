@@ -5,13 +5,22 @@ import { DecisionBoundary, LossCurve, Stats } from '../viz';
 export function OutputPanel() {
   const snapshot = useAppStore((s) => s.snapshot);
   const showTestData = useAppStore((s) => s.showTestData);
+  const sessionData = useAppStore((s) => s.sessionData);
+  const stepThrough = useAppStore((s) => s.stepThrough);
+  const setProbe = useAppStore.getState().setProbe;
   const [logScale, setLogScale] = useState(false);
   if (!snapshot) return null;
 
   return (
     <section className="panel output-panel">
       <h2>Output</h2>
-      <DecisionBoundary snapshot={snapshot} showTestData={showTestData} />
+      <DecisionBoundary
+        snapshot={snapshot}
+        data={sessionData}
+        showTestData={showTestData}
+        onPick={stepThrough ? setProbe : undefined}
+        selected={stepThrough?.probe}
+      />
       <Stats snapshot={snapshot} />
       <div className="loss-header">
         <h3>Loss</h3>

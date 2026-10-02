@@ -214,3 +214,75 @@ on the spirals to ≥ 95 % train accuracy in 2000 epochs. In the browser this ta
   L2 regularisation is the natural fix to demonstrate.
 - No component tests (no DOM test environment). The UI was checked by driving the dev and preview
   builds in headless Chrome.
+
+### Phase 3 — See inside training (2026-10-02)
+
+**Done:** Training runs in a **Web Worker** (`worker/training.worker.ts` → DOM-free
+`TrainingController`). The UI pulls snapshots, with at most one in flight and ≤ 15 per second.
+Engine additions: `Momentum` and `Adam` optimisers, L2 regularisation (`addL2`,
+gradient-checked) and an inverted `Dropout` layer (gradient-checked with a frozen mask). All three
+are live controls in a second header row. **Step-through mode:** pick a data point on the output
+plot, then step or animate the forward pass (activations light up, edges show w·a), the loss, and
+the backward pass (∂L/∂a per neuron, edges show the per-example ∂L/∂w). **Hover cards** on every
+edge and neuron show the value, the full-batch gradient, a sparkline of the last 100 epochs, and
+the probe values while step-through is open. **Inside training panel:** gradient RMS per layer
+over the run (log axis), plus per-layer weight and log-|gradient| histograms over time.
+Done-when: on the circle, a 6×8 sigmoid net's first-layer gradient is ~3e-4 of the output
+layer's, against ~0.1 for ReLU. ReLU reaches 90 % in ~9 epochs; sigmoid is still at chance after 600. A seeded test asserts both, and in the browser the fan-out of the gradient lines and the
+thinning backward edges make it visible. 123 tests.
+
+**Decisions:**
+
+- **Snapshots are pulled.** A rAF loop requests one when none is in flight and ≥ 66 ms have
+  passed, so a slow UI asks less often instead of building a backlog. Buffers are sent in the
+  transfer list (zero copy). The UI chooses `sessionId` on `init`, so replies from a previous
+  session are dropped. Point sets are sent once per session in `ready` (fixes the Phase 2 known
+  issue). Measured in Chrome: ~12 snapshots per second at 60 fps; Max speed reaches ~4,600
+  epochs/s on the spirals (the main-thread loop managed ~3,300).
+- **Speed is now epochs per second** (30 / 100 / 300 / 1000 / Max; default 300 ≈ the old
+  5 per frame). The worker trains in ≤ 12 ms slices paced to that rate, yields through a
+  `MessageChannel` (avoiding the 4 ms clamp on nested `setTimeout(0)`), and drops any backlog over
+  250 ms rather than racing to catch up. The controller takes an injected clock and scheduler, so
+  pacing is unit-tested with a fake clock.
+- **Observing never changes a run.** Snapshots, gradient measurements and probes run in evaluation
+  mode: dropout is the identity and makes no RNG draws, and the optimiser is untouched. A test
+  interleaves snapshots and probes with training and checks the weights stay bitwise identical.
+- **Dropout layers are always in the model** (after each hidden activation), so the rate can change
+  live. At rate 0 a Dropout layer is the identity and draws nothing, and it takes no draws from the
+  init RNG at construction, so seeded runs are unchanged (there is a test for this).
+- **Optimiser state** is keyed on each parameter's value tensor, which is stable, unlike the `Param`
+  objects `Sequential` rebuilds. Switching optimiser mid-run starts it with fresh state.
+- **L2 is coupled** (λ·w added to the gradient before the optimiser, so Adam + L2 is not AdamW) and
+  applies to weights only. Loss curves show the **data** loss without the penalty.
+- **Gradients shown in hover cards and histograms** are full-batch (whole training set, evaluation
+  mode, including the L2 term), not the noisy mini-batch gradients. They are measured at every
+  snapshot and at every timeline record.
+- **The histogram timeline** keeps 128 columns. When full it **drops every other column and doubles
+  the interval** instead of averaging pairs (a change from the plan), so each column is an exact
+  moment and the extra measurement cost grows only as O(log epochs). Weights use 32 bins over ±4,
+  with overflow clamped into the edge bins (the tooltip says "and beyond"). Gradients use 32 bins
+  over log10|g| ∈ [−10, 1], with zeros in the bottom bin; dead ReLUs show up there.
+- **The probe** is one example in evaluation mode with data loss only. At the output the view
+  shows ∂L/∂z = p − y; `dA` there is ∂L/∂p with p clamped. In step-through, backward edge widths
+  are logarithmic over four decades, relative to the largest ∂L/∂w in the whole trace rather than
+  per layer, so vanishing gradients stay visible. There are 2C stages: C forward, the loss, then
+  C − 1 backward.
+- **Colour:** layer depth uses an ordinal blue ramp, from faint for the first layer to strong for
+  the output. The stock reference steps failed the adjacent-ΔL check at 7 layers, so the ramp is
+  interpolated in OKLab between steps 250 → 700 (light) and 600 → 100 (dark). Both versions pass
+  the dataviz palette validator. Histogram density uses a sequential surface → blue ramp, scaled
+  by √fraction so thin tails stay visible.
+
+**Known issues:**
+
+- Each snapshot still copies the full loss history and runs one extra full-batch
+  forward/backward. Both are cheap at this scale; revisit for MNIST in Phase 5.
+- Weight histograms use a fixed ±4 range, so very large weights pile into the edge bins, and
+  slow-moving (e.g. sigmoid) layers look static at 0.25-wide bins.
+- With plain SGD, the full-batch gradient RMS line is spiky: weights move between records. This
+  is real behaviour, not a rendering artefact.
+- Right after Pause, the epoch readout can trail the true stopping point by one snapshot. A
+  request may already be in flight, and the final snapshot follows it.
+- Momentum β and Adam β₁/β₂ are fixed in the UI (configurable in the engine).
+- There are still no component tests. The UI was checked by driving the dev server and the static
+  preview build (light and dark) in headless Chrome.

@@ -1,12 +1,10 @@
-import { type Speed, randomSeed, useAppStore } from '../state/store';
-import type { Hyperparams } from '../worker';
+import { randomSeed, useAppStore } from '../state/store';
+import { type Hyperparams, SPEEDS, type Speed } from '../worker';
 
 const LEARNING_RATES = [0.0001, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1, 3];
 const BATCH_SIZES: Hyperparams['batchSize'][] = [1, 5, 10, 25, 50, 'full'];
-const SPEEDS: Speed[] = [1, 5, 20, 'max'];
-
 function speedLabel(s: Speed): string {
-  return s === 'max' ? 'Max' : `${s} epoch${s === 1 ? '' : 's'} / frame`;
+  return s === 'max' ? 'Max' : `${s.toLocaleString('en-GB')} epochs/s`;
 }
 
 export function TransportBar({ onStep }: { onStep: () => void }) {

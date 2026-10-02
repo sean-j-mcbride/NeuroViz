@@ -8,6 +8,7 @@ export type LayerConfig =
   | { kind: 'relu' }
   | { kind: 'tanh' }
   | { kind: 'sigmoid' }
+  | { kind: 'dropout'; rate: number }
   | { kind: 'sequential'; layers: LayerConfig[] };
 
 export interface Param {

@@ -295,8 +295,22 @@ button.primary {
   stroke-opacity: 0.75;
 }
 
-.edge:hover {
+.edge.active {
   stroke-opacity: 1;
+  filter: drop-shadow(0 0 2px var(--fg));
+}
+
+.edge.dim {
+  stroke-opacity: 0.12;
+}
+
+/* Wide, invisible stroke so thin edges are easy to hover. */
+.edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 8;
+  pointer-events: stroke;
+  cursor: crosshair;
 }
 
 .edge.pos {
@@ -342,6 +356,42 @@ button.primary {
   overflow: visible;
 }
 
+.neuron.dim {
+  opacity: 0.3;
+}
+
+.neuron.probed {
+  border-color: transparent;
+}
+
+.probe-marker {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1.5px solid #000;
+  pointer-events: none;
+}
+
+.probe-value {
+  position: absolute;
+  left: 50%;
+  bottom: -2px;
+  transform: translate(-50%, 50%);
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 1;
+}
+
 .neuron.output {
   outline: 2px solid var(--muted);
   outline-offset: 1px;
@@ -375,6 +425,10 @@ button.primary {
   border: 1px solid var(--border);
   border-radius: 4px;
   overflow: hidden;
+}
+
+.decision-boundary.picking .points {
+  cursor: crosshair;
 }
 
 .decision-boundary canvas {
@@ -427,6 +481,13 @@ button.primary {
   color: var(--muted);
 }
 
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
 .swatch {
   display: inline-block;
   width: 14px;
@@ -445,4 +506,190 @@ button.primary {
 
 .loss-curve canvas {
   display: block;
+}
+
+/* ---------- Optimiser controls ---------- */
+
+button.toggle.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* ---------- Tooltip ---------- */
+
+.tooltip {
+  position: fixed;
+  z-index: 10;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.15);
+  padding: 8px 10px;
+  font-size: 12px;
+  max-width: 320px;
+}
+
+.tooltip-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.tooltip table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.tooltip th {
+  text-align: left;
+  font-weight: normal;
+  color: var(--muted);
+  padding: 1px 12px 1px 0;
+}
+
+.tooltip td {
+  text-align: right;
+  padding: 1px 0;
+}
+
+.sparkline {
+  margin: 6px 0 0;
+}
+
+.sparkline svg {
+  display: block;
+}
+
+.sparkline polyline {
+  fill: none;
+  stroke: var(--fg);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.sparkline circle {
+  fill: var(--fg);
+}
+
+.sparkline figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* ---------- Step-through ---------- */
+
+.step-through {
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.step-through-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.step-through-point {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.step-through-buttons {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.step-through .close {
+  margin-left: auto;
+}
+
+.step-through-buttons .close {
+  margin-left: 0;
+}
+
+.step-through progress {
+  width: 100%;
+  height: 4px;
+  margin: 8px 0 0;
+  accent-color: var(--accent);
+}
+
+.step-through-hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+/* ---------- Inside training ---------- */
+
+.inside-panel {
+  margin-top: 16px;
+}
+
+.inside-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 24px;
+}
+
+@media (max-width: 1000px) {
+  .inside-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chart-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-bottom: 4px;
+}
+
+.chart-header .legend {
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.hist-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.hist-head h3 {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.hist-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hist-label .swatch {
+  margin-left: 0;
+}
+
+.gradient-norms canvas,
+.histogram-timeline canvas {
+  display: block;
+}
+
+.legend-item .swatch {
+  margin-left: 0;
+  border-top-width: 3px;
 }
