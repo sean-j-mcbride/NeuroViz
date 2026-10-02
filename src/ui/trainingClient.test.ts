@@ -236,4 +236,62 @@ describe('TrainingClient ↔ TrainingController', () => {
     expect(last).toBeGreaterThan(250);
     expect(last).toBeLessThanOrEqual(301);
   });
+
+  it('a checkpoint reflects hyperparameters sent before it and resumes the run', async () => {
+    const c = connected();
+    c.client.init(CONFIG);
+    c.client.step();
+    c.client.setHyperparams({ ...CONFIG, optimiser: 'adam', lr: 0.1 }, false);
+    c.client.step();
+    const saved = c.client.requestCheckpoint();
+    c.flush();
+    const checkpoint = await saved;
+    expect(checkpoint.epoch).toBe(2);
+    expect(checkpoint.optimiser.kind).toBe('adam');
+
+    c.client.init({ ...CONFIG, optimiser: 'adam', lr: 0.1, resume: checkpoint });
+    c.flush();
+    expect(c.snapshots.at(-1)!.epoch).toBe(2);
+  });
+
+  it('a checkpoint request is rejected if the run restarts before the reply', async () => {
+    const c = connected();
+    c.client.init(CONFIG);
+    c.flush();
+    const saved = c.client.requestCheckpoint();
+    c.client.init({ ...CONFIG, seed: 2 });
+    c.flush();
+    await expect(saved).rejects.toThrow(/restarted before it was saved/);
+  });
+});
+
+describe('TrainingClient checkpoints (unit)', () => {
+  it('rejects when detached, on a worker error for that request, and on detach', async () => {
+    const { client, sent } = setup();
+    client.init(CONFIG);
+    const failed = client.requestCheckpoint();
+    const req = sent.at(-1)!;
+    if (req.type !== 'checkpoint') throw new Error('expected a checkpoint request');
+    client.receive({ type: 'error', message: 'boom', requestId: req.requestId });
+    await expect(failed).rejects.toThrow('boom');
+
+    const dropped = client.requestCheckpoint();
+    client.detach();
+    await expect(dropped).rejects.toThrow(/stopped/);
+    await expect(client.requestCheckpoint()).rejects.toThrow(/not running/);
+  });
+
+  it('a checkpoint error does not disturb the snapshot in flight', () => {
+    const { client, sent, requests, reply, got } = setup();
+    client.init(CONFIG); // snapshot request in flight
+    void client.requestCheckpoint().catch(() => {});
+    const req = sent.at(-1)!;
+    if (req.type !== 'checkpoint') throw new Error('expected a checkpoint request');
+    client.receive({ type: 'error', message: 'boom', requestId: req.requestId });
+    client.requestSnapshot();
+    expect(requests()).toHaveLength(1); // still in flight; queued
+    reply(1, 0);
+    expect(got.snapshots).toEqual([0]);
+    expect(got.errors).toEqual([]);
+  });
 });

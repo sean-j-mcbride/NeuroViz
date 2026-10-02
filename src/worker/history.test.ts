@@ -74,6 +74,12 @@ describe('HistogramTimeline', () => {
     expect(t.due(0)).toBe(false);
     expect(t.due(1)).toBe(true);
   });
+
+  it('keeps even spacing when recording starts at a later (odd) epoch, as after a resume', () => {
+    const t = new HistogramTimeline(1, 4);
+    for (let e = 7; e < 27; e++) if (t.due(e)) t.record(e, sample(e));
+    expect(Array.from(t.snapshot().epochs)).toEqual([7, 15, 23]);
+  });
 });
 
 describe('ParamHistory', () => {

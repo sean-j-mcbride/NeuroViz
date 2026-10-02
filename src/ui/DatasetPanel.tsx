@@ -1,13 +1,6 @@
-import { TOY2D_KINDS, type Toy2DKind } from '../data';
-import { randomSeed, useAppStore } from '../state/store';
+import { TOY2D_KINDS } from '../data';
+import { DATASET_NAMES, NOISE, POINTS, randomSeed, useAppStore } from '../state/store';
 import { DatasetThumb } from './DatasetThumb';
-
-const NAMES: Record<Toy2DKind, string> = {
-  circle: 'Circle',
-  xor: 'XOR',
-  spirals: 'Spirals',
-  gaussians: 'Gaussians',
-};
 
 export function DatasetPanel() {
   const { kind, n, noise } = useAppStore((s) => s.config.dataset);
@@ -28,7 +21,7 @@ export function DatasetPanel() {
             onClick={() => setDataset({ kind: k })}
           >
             <DatasetThumb kind={k} />
-            <span>{NAMES[k]}</span>
+            <span>{DATASET_NAMES[k]}</span>
           </button>
         ))}
       </div>
@@ -39,9 +32,9 @@ export function DatasetPanel() {
         </span>
         <input
           type="range"
-          min={0}
-          max={0.5}
-          step={0.05}
+          min={NOISE.min}
+          max={NOISE.max}
+          step={NOISE.step}
           value={noise}
           onChange={(e) => setDataset({ noise: Number(e.target.value) })}
         />
@@ -53,9 +46,9 @@ export function DatasetPanel() {
         </span>
         <input
           type="range"
-          min={100}
-          max={1000}
-          step={50}
+          min={POINTS.min}
+          max={POINTS.max}
+          step={POINTS.step}
           value={n}
           onChange={(e) => setDataset({ n: Number(e.target.value) })}
         />

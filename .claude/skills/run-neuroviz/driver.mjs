@@ -79,6 +79,9 @@ const tooltip = async () =>
     ? (await page.innerText('.tooltip')).replace(/\s+/g, ' ')
     : null;
 
+const noticeText = async () =>
+  (await page.locator('.notice').count()) ? await page.innerText('.notice span') : null;
+
 const commands = {
   /** shot NAME [SELECTOR] — full page, or one element. */
   async shot(name, ...sel) {
@@ -252,6 +255,36 @@ const commands = {
     }
     await page.waitForTimeout(300);
     return { network: await page.innerText('.network-toolbar') };
+  },
+  /** download NAME SELECTOR — click SELECTOR and save the file it downloads to the output dir as NAME. */
+  async download(name, ...sel) {
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click(sel.join(' '))]);
+    const path = join(out, name);
+    await dl.saveAs(path);
+    await page.waitForTimeout(200);
+    return { path, suggested: dl.suggestedFilename() };
+  },
+  /** upload FILE SELECTOR — give FILE to a (possibly hidden) file input, as if chosen in the picker. */
+  async upload(file, ...sel) {
+    await page.setInputFiles(sel.join(' '), file);
+    await page.waitForTimeout(500);
+    return { notice: await noticeText() };
+  },
+  /** goto URL — load a URL (e.g. a share link), wait for the first snapshot. */
+  async goto(target) {
+    await page.goto(target);
+    await page.waitForSelector('.inside-panel');
+    return { url: page.url(), notice: await noticeText() };
+  },
+  /** reload — reload the page (keeping the hash), wait for the first snapshot. */
+  async reload() {
+    await page.reload();
+    await page.waitForSelector('.inside-panel');
+    return { url: page.url() };
+  },
+  /** url — the current address, including the settings hash. */
+  async url() {
+    return { url: page.url() };
   },
   async workers() {
     return { workers: page.workers().map((w) => w.url().split('/').pop()) };

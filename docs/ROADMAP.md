@@ -70,6 +70,10 @@ Move to the next phase only when the current one feels solid.
 - Side-by-side comparison of two runs (loss curves overlaid).
 - Presets ("Underfitting", "Overfitting", "Dead ReLUs", "Too high LR").
 
+**Done when:** you can save mid-run, reload the page, load the file and train on as if nothing
+happened (bitwise identical, by test); a pasted link reproduces the set-up; and each preset shows
+its failure mode next to a pinned run with the fix.
+
 ---
 
 ## Phase 5 — MNIST with an MLP
@@ -307,3 +311,81 @@ thinning backward edges make it visible. 160 tests.
 - Component tests cover the network graph, step-through bar, tables, point picking and store
   logic, but not canvas drawing (jsdom has no 2D context, so heatmaps, the decision boundary and
   charts are only checked in the browser driver's screenshots).
+
+### Phase 4 — Save, load, compare (2026-10-02)
+
+**Done:** **Save model / Load model** writes and reads a readable JSON file (settings plus a
+checkpoint). Loading resumes **exactly**: train N epochs, save, load and train M more is bitwise
+identical to training N + M, for SGD, momentum and Adam with dropout and L2. Tests cover this
+through the full file round-trip. **Share links:** the settings live in a readable URL hash
+(`#data=spirals&points=400&…&layers=8tanh,8tanh&lr=0.03&…`). It stays in step as you change
+things, it is applied before the first render, and **Copy link** copies it. **Presets:**
+Underfitting, Overfitting, Dead ReLUs and Too high LR, plus Default settings. Each has a note
+(what it is, what to look for, what to try) and a **Pin this run and try the fix** button.
+**Compare:** pin the current run (or load a saved model) as a reference. Its loss curves are
+overlaid on the live ones, and a Compare panel shows both decision boundaries side by side, a
+table of scores and the settings that changed. 235 tests.
+
+**Decisions:**
+
+- **What a checkpoint holds:** epoch, step, loss histories, parameters, optimiser state, both RNG
+  states, and the **training-set order**. Each epoch shuffles the previous order in place, so the
+  next one depends on it. Mutation tests show that dropping the order, either RNG or the optimiser
+  state each breaks exact resume. Optimiser state is keyed by parameter name (`"0.W"`), not by
+  tensor identity. Engine hooks: `Rng.getState/setState`, `Optimiser.saveState/loadState`,
+  `exportParams/importParams`.
+- **The file format** is `{ format: "neuroviz-model", version: 1, savedAt, config, checkpoint }`.
+  Each array goes on one line, and each float32 is written as the shortest decimal that reads back
+  as the same float32 (`0.1`, not `0.10000000149011612`). That is lossless (checked on 10,000
+  random bit patterns) and readable. A diverged loss is written as `"NaN"` or `"Infinity"`.
+  Loading checks the structure, holds the settings to the choices the controls offer, then builds
+  the session the file describes. Any mismatch (another network, another dataset size) becomes a
+  readable error **before** anything is replaced.
+- **The settings type and every control's choices moved to `state/config.ts`.** The UI, the
+  validator (`state/validate.ts`), the link codec and the presets all share it. Settings from a
+  file must be valid. A link is lenient: missing values take defaults, and invalid ones are
+  ignored with a notice that names what is allowed.
+- **Reset after a load returns to the loaded checkpoint.** Changing the data, network or seed
+  drops the checkpoint; hyperparameters still apply live. Loading a model or a preset always
+  starts a fresh, paused session.
+- **A link reproduces the set-up, not the weights.** Everything is seeded, so training from it
+  repeats the run exactly. The hash is written with `history.replaceState`, debounced to 300 ms,
+  because Safari throws after 100 calls in 30 s while a slider is dragged. A `hashchange`
+  listener applies links pasted into an open tab.
+- **Worker protocol:** `checkpoint` request/reply, and `init` takes `resume`. Errors now carry the
+  `requestId` of a failed request, so a failed save rejects the right promise without disturbing
+  the snapshot in flight. A save sees any hyperparameter change sent before it, because messages
+  are handled in order.
+- **Presets were picked by a seeded sweep** (seeds 1–5) and each has a **fix**. Tests check both
+  the effect and the fix for seed 1; the 5-seed ranges are quoted in `presets.test.ts`. Default
+  spirals converges too slowly to be a quick "good fit" baseline, so each preset is paired with its
+  own fix instead. The fixes are: Underfitting (circle, 1 tanh neuron, 65 % → 3 neurons, 99 %);
+  Overfitting (150 noisy points, 6×8 ReLU, Adam; test loss climbs to 1.2–4.5 → L2 0.03 keeps it at
+  0.32–0.40); Dead ReLUs (4×8 ReLU, Adam lr 0.1, 50–69 % of neurons dead → lr 0.01, ≤ 16 %);
+  Too high LR (the default with lr 3; the loss rises in ~44 % of epochs → lr 0.03, ≤ 2.4 %).
+- **Comparing is "pin a reference"** (agreed in planning), not two live runs. One worker. A pinned
+  run keeps its snapshot's arrays by reference (snapshots are never mutated). A reference loaded
+  from a file rebuilds that session on the main thread just long enough for one snapshot.
+- **Reference colour:** violet (`#4a3aa7` light, `#ab9ff5` dark). Hue shows which run, and the
+  dashes show test vs train, as before. Against the existing ink and grey lines, the palette
+  validator gives normal-vision ΔE ≥ 17 in both modes. A lighter violet for the reference's test
+  line failed against the grey test line (ΔE 8.5), so both reference lines use the one violet. The
+  reference is drawn thinner, behind the live run. The x-axis spans the longer run. The loss curve
+  gained a crosshair tooltip with every value at the hovered epoch, and lines now break at
+  non-finite values instead of joining across them.
+- `HistogramTimeline.due` counts from the first recorded epoch rather than 0, so a run resumed at
+  an odd epoch keeps evenly spaced columns.
+- The run-neuroviz driver gained `download`, `upload`, `goto`, `reload` and `url`.
+
+**Known issues:**
+
+- After a load, the histogram timeline and the hover sparklines restart at the loaded epoch.
+  They are observations, so they aren't saved.
+- Model files grow with the loss history: ~18 KB at 600 epochs, roughly 2 MB at 100,000.
+- A pinned run records its final settings only. If hyperparameters were changed mid-run, the
+  diff shows where they ended up.
+- One noisy Adam spike can squash the linear loss axis (the Overfitting preset reaches 13); the
+  log-scale toggle helps.
+- Dead ReLUs are visible as blank tiles and in the bottom gradient bin, but no neuron is
+  explicitly flagged as dead.
+- Speed and "Show test data" are not part of the link.

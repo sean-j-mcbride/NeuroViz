@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type {
+  Checkpoint,
   DatasetSpec,
   Hyperparams,
   NetworkSpec,
@@ -8,31 +9,12 @@ import type {
   Snapshot,
   Speed,
 } from '../worker';
+import { DEFAULT_CONFIG, type PlaygroundConfig, sameConfig } from './config';
+import type { ModelFile } from './modelFile';
+import { PRESETS, type PresetId } from './presets';
+import { type ReferenceRun, referenceFromSnapshot } from './reference';
 
-/** Everything needed to reproduce a run. Plain JSON. */
-export interface PlaygroundConfig {
-  dataset: DatasetSpec;
-  network: NetworkSpec;
-  training: Hyperparams;
-  /** Seeds weight initialisation, shuffling and dropout. */
-  seed: number;
-}
-
-export const MAX_HIDDEN_LAYERS = 6;
-export const MAX_UNITS = 8;
-
-export const DEFAULT_CONFIG: PlaygroundConfig = {
-  dataset: { kind: 'spirals', n: 400, noise: 0, seed: 1 },
-  network: {
-    hidden: [
-      { units: 8, activation: 'tanh' },
-      { units: 8, activation: 'tanh' },
-    ],
-  },
-  // Tuned for the spirals: every seed tried reaches ≥ 95 % train accuracy (see session.test.ts).
-  training: { lr: 0.03, batchSize: 10, optimiser: 'sgd', l2: 0, dropout: 0 },
-  seed: 1,
-};
+export * from './config';
 
 /** Step-through mode: one data point traced forward then backward, one stage at a time. */
 export interface StepThrough {
@@ -58,6 +40,17 @@ export interface AppState {
   snapshot: Snapshot | null;
   /** Non-null while step-through mode is open. */
   stepThrough: StepThrough | null;
+  /**
+   * A loaded model's checkpoint: the session starts from it, and Reset returns
+   * to it. Changing the data, network or seed drops it.
+   */
+  resume: Checkpoint | null;
+  /** The last preset loaded, while its note should show; null after any other load. */
+  presetId: PresetId | null;
+  /** A frozen run whose curves and boundary are drawn alongside the live run. */
+  reference: ReferenceRun | null;
+  /** A message for the user (bad file, ignored link values, link copied, …). */
+  notice: Notice | null;
 
   setDataset(patch: Partial<DatasetSpec>): void;
   setNetwork(network: NetworkSpec): void;
@@ -74,9 +67,35 @@ export interface AppState {
   setStepThroughOpen(open: boolean): void;
   setProbe(probe: ProbeRef): void;
   setStage(stage: number): void;
+  /** Starts a fresh, paused run from `config` (optionally resuming a checkpoint). */
+  setConfig(config: PlaygroundConfig, opts?: { resume?: Checkpoint; presetId?: PresetId }): void;
+  loadModel(file: ModelFile): void;
+  loadPreset(id: PresetId): void;
+  /** Pins the current run, then starts its preset's fix so the two can be compared. */
+  tryPresetFix(): void;
+  /** Freezes the current run as the reference. */
+  pinReference(label?: string): void;
+  setReference(reference: ReferenceRun | null): void;
+  setNotice(notice: Notice | null): void;
+  /** Hides the preset note. */
+  dismissPreset(): void;
 }
 
-export const useAppStore = create<AppState>()((set) => ({
+export interface Notice {
+  kind: 'error' | 'info';
+  text: string;
+}
+
+/** The preset whose config (or fix) `config` is, if any. */
+export function presetLabel(config: PlaygroundConfig, presetId: PresetId | null): string | null {
+  const p = PRESETS.find((q) => q.id === presetId);
+  if (!p) return null;
+  if (sameConfig(config, p.config)) return p.name;
+  if (sameConfig(config, p.fix)) return `${p.name}, fixed`;
+  return null;
+}
+
+export const useAppStore = create<AppState>()((set, get) => ({
   config: DEFAULT_CONFIG,
   running: false,
   speed: 300,
@@ -85,22 +104,28 @@ export const useAppStore = create<AppState>()((set) => ({
   sessionData: null,
   snapshot: null,
   stepThrough: null,
+  resume: null,
+  presetId: null,
+  reference: null,
+  notice: null,
 
   setDataset: (patch) =>
     set(({ config }) => ({
       config: { ...config, dataset: { ...config.dataset, ...patch } },
       // Point indices refer to the old data.
       stepThrough: null,
+      resume: null,
     })),
   setNetwork: (network) =>
     set(({ config, stepThrough }) => ({
       config: { ...config, network },
       // Stage numbers depend on the column count.
       stepThrough: stepThrough && { ...stepThrough, stage: 0 },
+      resume: null,
     })),
   setTraining: (patch) =>
     set(({ config }) => ({ config: { ...config, training: { ...config.training, ...patch } } })),
-  setSeed: (seed) => set(({ config }) => ({ config: { ...config, seed } })),
+  setSeed: (seed) => set(({ config }) => ({ config: { ...config, seed }, resume: null })),
   setRunning: (running) =>
     set(({ stepThrough }) => ({ running, stepThrough: running ? null : stepThrough })),
   setSpeed: (speed) => set({ speed }),
@@ -124,6 +149,37 @@ export const useAppStore = create<AppState>()((set) => ({
   setProbe: (probe) => set({ stepThrough: { probe, stage: 0 } }),
   setStage: (stage) =>
     set(({ stepThrough }) => ({ stepThrough: stepThrough && { ...stepThrough, stage } })),
+  setConfig: (config, { resume, presetId } = {}) =>
+    set(({ resetCount }) => ({
+      config,
+      resume: resume ?? null,
+      presetId: presetId ?? null,
+      running: false,
+      stepThrough: null,
+      // Always a fresh session, even when only hyperparameters changed.
+      resetCount: resetCount + 1,
+    })),
+  loadModel: ({ config, checkpoint }) => get().setConfig(config, { resume: checkpoint }),
+  loadPreset: (id) => {
+    const p = PRESETS.find((q) => q.id === id);
+    if (p) get().setConfig(p.config, { presetId: id });
+  },
+  tryPresetFix: () => {
+    const { presetId, config } = get();
+    const p = PRESETS.find((q) => q.id === presetId);
+    if (!p || !sameConfig(config, p.config)) return;
+    get().pinReference(p.name);
+    get().setConfig(p.fix, { presetId: p.id });
+  },
+  pinReference: (label) => {
+    const { config, presetId, snapshot, sessionData } = get();
+    if (!snapshot) return;
+    const name = label ?? presetLabel(config, presetId) ?? 'Pinned run';
+    set({ reference: referenceFromSnapshot(name, config, snapshot, sessionData) });
+  },
+  setReference: (reference) => set({ reference }),
+  setNotice: (notice) => set({ notice }),
+  dismissPreset: () => set({ presetId: null }),
 }));
 
 /** A fresh random seed for "Regenerate" / "New weights" (UI-only randomness). */

@@ -1,3 +1,4 @@
+import { checkpointBuffers } from './checkpoint';
 import type { FromWorker, Speed, ToWorker } from './protocol';
 import { TrainingSession } from './session';
 import { snapshotBuffers } from './snapshot';
@@ -41,7 +42,11 @@ export class TrainingController {
     try {
       this.dispatch(msg);
     } catch (e) {
-      this.post({ type: 'error', message: e instanceof Error ? e.message : String(e) }, []);
+      const message = e instanceof Error ? e.message : String(e);
+      this.post(
+        { type: 'error', message, ...('requestId' in msg && { requestId: msg.requestId }) },
+        [],
+      );
     }
   }
 
@@ -82,6 +87,14 @@ export class TrainingController {
         this.post(
           { type: 'snapshot', sessionId: this.sessionId, requestId: msg.requestId, snapshot },
           snapshotBuffers(snapshot),
+        );
+        return;
+      }
+      case 'checkpoint': {
+        const checkpoint = this.requireSession().checkpoint();
+        this.post(
+          { type: 'checkpoint', sessionId: this.sessionId, requestId: msg.requestId, checkpoint },
+          checkpointBuffers(checkpoint),
         );
         return;
       }

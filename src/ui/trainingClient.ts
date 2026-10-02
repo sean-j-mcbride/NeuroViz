@@ -1,4 +1,5 @@
 import type {
+  Checkpoint,
   FromWorker,
   Hyperparams,
   ProbeRef,
@@ -42,6 +43,11 @@ export class TrainingClient {
   private queued = false;
   private lastRequest = -Infinity;
   private readonly intervalMs: number;
+  /** Checkpoint requests awaiting a reply, by request id. */
+  private readonly checkpoints = new Map<
+    number,
+    { sessionId: number; resolve(c: Checkpoint): void; reject(e: Error): void }
+  >();
 
   constructor(
     private readonly handlers: ClientHandlers,
@@ -61,6 +67,10 @@ export class TrainingClient {
     this.post = null;
     this.inFlight = false;
     this.queued = false;
+    for (const { reject } of this.checkpoints.values()) {
+      reject(new Error('The training worker stopped'));
+    }
+    this.checkpoints.clear();
   }
 
   init(config: SessionConfig): void {
@@ -111,7 +121,37 @@ export class TrainingClient {
     this.post({ type: 'snapshot', requestId: ++this.requestId, ...(probe && { probe }) });
   }
 
+  /**
+   * Everything needed to save the current run. Any hyperparameter change sent
+   * earlier is applied first (the worker handles messages in order). Rejects
+   * if the session is replaced before the reply arrives.
+   */
+  requestCheckpoint(): Promise<Checkpoint> {
+    const post = this.post;
+    if (!post) return Promise.reject(new Error('The training worker is not running'));
+    const requestId = ++this.requestId;
+    return new Promise((resolve, reject) => {
+      this.checkpoints.set(requestId, { sessionId: this.sessionId, resolve, reject });
+      post({ type: 'checkpoint', requestId });
+    });
+  }
+
   receive(msg: FromWorker): void {
+    const requestId = 'requestId' in msg ? msg.requestId : undefined;
+    const pending = requestId === undefined ? undefined : this.checkpoints.get(requestId);
+    if (pending) {
+      this.checkpoints.delete(requestId!);
+      if (msg.type === 'checkpoint' && msg.sessionId === this.sessionId) {
+        pending.resolve(msg.checkpoint);
+      } else {
+        pending.reject(
+          new Error(
+            msg.type === 'error' ? msg.message : 'The run was restarted before it was saved',
+          ),
+        );
+      }
+      return;
+    }
     switch (msg.type) {
       case 'ready':
         if (msg.sessionId === this.sessionId) this.handlers.onData(msg.data);
@@ -121,6 +161,8 @@ export class TrainingClient {
         if (msg.sessionId === this.sessionId) this.handlers.onSnapshot(msg.snapshot);
         if (this.queued) this.requestSnapshot();
         return;
+      case 'checkpoint':
+        return; // no longer awaited (the worker was re-attached)
       case 'error':
         this.inFlight = false;
         this.handlers.onError(msg.message);

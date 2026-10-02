@@ -1,13 +1,6 @@
-import { MAX_HIDDEN_LAYERS, MAX_UNITS, useAppStore } from '../state/store';
+import { ACTIVATION_NAMES, MAX_HIDDEN_LAYERS, MAX_UNITS, useAppStore } from '../state/store';
 import { NetworkGraph, StepThroughBar, columnLabel } from '../viz';
 import { ACTIVATIONS, type Activation, type HiddenLayerSpec } from '../worker';
-
-const ACTIVATION_NAMES: Record<Activation, string> = {
-  tanh: 'Tanh',
-  relu: 'ReLU',
-  sigmoid: 'Sigmoid',
-  linear: 'Linear',
-};
 
 /** The network graph, with controls to edit the hidden layers above it. */
 export function ArchitectureBuilder() {

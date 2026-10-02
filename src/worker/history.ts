@@ -118,11 +118,13 @@ export class HistogramTimeline {
     }));
   }
 
-  /** Whether `epoch` should be recorded. */
+  /**
+   * Whether `epoch` should be recorded: every `interval` epochs counted from
+   * the first recorded one (epoch 0, or where a resumed run picked up).
+   */
   due(epoch: number): boolean {
-    return (
-      epoch % this.interval === 0 && (this.length === 0 || epoch > this.epochs[this.length - 1]!)
-    );
+    if (this.length === 0) return true;
+    return (epoch - this.epochs[0]!) % this.interval === 0 && epoch > this.epochs[this.length - 1]!;
   }
 
   record(epoch: number, samples: LayerSample[]): void {
@@ -138,7 +140,7 @@ export class HistogramTimeline {
     });
   }
 
-  /** Keeps the even columns (epochs 0, 2·i, 4·i, …) and doubles the interval. */
+  /** Keeps the even columns (epochs s, s + 2·i, s + 4·i, … from the start s) and doubles the interval. */
   private compact(): void {
     const half = this.capacity / 2;
     const keep = (a: Float32Array, width: number) => {

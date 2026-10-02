@@ -33,4 +33,14 @@ describe('Rng', () => {
     expect(mean).toBeCloseTo(2, 1);
     expect(Math.sqrt(variance)).toBeCloseTo(3, 1);
   });
+
+  it('getState/setState resume the exact sequence, including a pending normal() spare', () => {
+    const a = new Rng(9);
+    for (let i = 0; i < 10; i++) a.next();
+    a.normal(); // leaves a spare cached
+    const b = new Rng(1);
+    b.setState(JSON.parse(JSON.stringify(a.getState())) as ReturnType<Rng['getState']>);
+    for (let i = 0; i < 100; i++) expect(b.normal()).toBe(a.normal());
+    for (let i = 0; i < 100; i++) expect(b.next()).toBe(a.next());
+  });
 });

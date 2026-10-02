@@ -1,5 +1,5 @@
 import { type MouseEvent, useEffect, useRef } from 'react';
-import type { PointSet, ProbeRef, SessionData, Snapshot } from '../worker';
+import type { OutputGrid, PointSet, ProbeRef, SessionData } from '../worker';
 import { NEGATIVE, NORMALISERS, POSITIVE, rgbCss } from './colour';
 import { Heatmap } from './Heatmap';
 
@@ -10,13 +10,15 @@ const RADIUS = 3;
 const PICK_RADIUS = 10;
 
 interface DecisionBoundaryProps {
-  snapshot: Snapshot;
+  boundary: OutputGrid;
   data: SessionData | null;
   showTestData: boolean;
   /** When set, clicking near a point picks it. */
   onPick?: (ref: ProbeRef) => void;
   /** The picked point, drawn with a ring. */
   selected?: ProbeRef | null;
+  /** Hover text when not picking; also the accessible name. */
+  title?: string;
 }
 
 function drawPoints(
@@ -37,15 +39,15 @@ function drawPoints(
 
 /** The output probability over the input plane, with the data drawn on top. */
 export function DecisionBoundary({
-  snapshot,
+  boundary,
   data,
   showTestData,
   onPick,
   selected,
+  title = 'Probability of the blue class',
 }: DecisionBoundaryProps) {
   const overlay = useRef<HTMLCanvasElement>(null);
-  const { columns, gridSize, domain } = snapshot;
-  const output = columns[columns.length - 1]!.values;
+  const { values: output, gridSize, domain } = boundary;
 
   useEffect(() => {
     const canvas = overlay.current;
@@ -101,7 +103,7 @@ export function DecisionBoundary({
         values={output}
         gridSize={gridSize}
         norm={NORMALISERS.output(output, domain)}
-        title={onPick ? undefined : 'Probability of the blue class'}
+        title={onPick ? undefined : title}
       />
       <canvas ref={overlay} className="points" onClick={pick} />
     </div>

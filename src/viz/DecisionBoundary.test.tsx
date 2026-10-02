@@ -2,6 +2,7 @@
 import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { smallSession } from '../test/fixtures';
+import { outputGrid } from '../worker';
 import { DecisionBoundary } from './DecisionBoundary';
 
 const session = smallSession(0);
@@ -20,7 +21,7 @@ function renderPickable(showTestData: boolean) {
   const onPick = vi.fn();
   const { container } = render(
     <DecisionBoundary
-      snapshot={snapshot}
+      boundary={outputGrid(snapshot)}
       data={data}
       showTestData={showTestData}
       onPick={onPick}
@@ -57,7 +58,7 @@ describe('DecisionBoundary picking', () => {
 
   it('without onPick, clicks do nothing and the plot is not marked pickable', () => {
     const { container } = render(
-      <DecisionBoundary snapshot={snapshot} data={data} showTestData={false} />,
+      <DecisionBoundary boundary={outputGrid(snapshot)} data={data} showTestData={false} />,
     );
     expect(container.querySelector('.decision-boundary.picking')).toBeNull();
   });

@@ -1,3 +1,4 @@
+import type { Checkpoint } from './checkpoint';
 import type { Hyperparams, SessionConfig } from './session';
 import type { ProbeRef, SessionData, Snapshot } from './snapshot';
 
@@ -15,10 +16,14 @@ export type ToWorker =
   /** Train exactly one epoch (while paused). */
   | { type: 'step' }
   /** Ask for a snapshot; the UI sends one at a time, which throttles the flow. */
-  | { type: 'snapshot'; requestId: number; probe?: ProbeRef };
+  | { type: 'snapshot'; requestId: number; probe?: ProbeRef }
+  /** Ask for everything needed to save the run and resume it exactly. */
+  | { type: 'checkpoint'; requestId: number };
 
 /** Messages from the training worker to the UI. */
 export type FromWorker =
   | { type: 'ready'; sessionId: number; data: SessionData }
   | { type: 'snapshot'; sessionId: number; requestId: number; snapshot: Snapshot }
-  | { type: 'error'; message: string };
+  | { type: 'checkpoint'; sessionId: number; requestId: number; checkpoint: Checkpoint }
+  /** `requestId` is set when the failed message was a request. */
+  | { type: 'error'; message: string; requestId?: number };

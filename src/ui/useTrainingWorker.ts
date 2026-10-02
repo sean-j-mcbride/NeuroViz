@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
-import { useAppStore } from '../state/store';
-import type { FromWorker } from '../worker';
+import { toSessionConfig, useAppStore } from '../state/store';
+import type { Checkpoint, FromWorker } from '../worker';
 import { TrainingClient } from './trainingClient';
 
 /** A client that reports into the app store. */
@@ -9,7 +9,10 @@ function createClient(): TrainingClient {
     {
       onData: (data) => useAppStore.getState().setSessionData(data),
       onSnapshot: (snapshot) => useAppStore.getState().setSnapshot(snapshot),
-      onError: (message) => console.error(`Training worker: ${message}`),
+      onError: (message) => {
+        console.error(`Training worker: ${message}`);
+        useAppStore.getState().setNotice({ kind: 'error', text: `Training failed: ${message}` });
+      },
     },
     {
       now: () => performance.now(),
@@ -23,7 +26,10 @@ function createClient(): TrainingClient {
  * changes become worker messages; the request / session logic lives in the
  * unit-tested `TrainingClient`, and this hook only wires it to React.
  */
-export function useTrainingWorker(): { step: () => void } {
+export function useTrainingWorker(): {
+  step: () => void;
+  requestCheckpoint: () => Promise<Checkpoint>;
+} {
   const { dataset, network, seed, training } = useAppStore((s) => s.config);
   const resetCount = useAppStore((s) => s.resetCount);
   const running = useAppStore((s) => s.running);
@@ -46,10 +52,11 @@ export function useTrainingWorker(): { step: () => void } {
     };
   }, [client]);
 
-  // New data, architecture or seed (or Reset) → fresh session.
+  // New data, architecture or seed (or Reset, or a load) → fresh session,
+  // resuming a loaded checkpoint if there is one.
   useEffect(() => {
-    const { training: t } = useAppStore.getState().config;
-    client.init({ dataset, network, seed, ...t });
+    const { config, resume } = useAppStore.getState();
+    client.init(toSessionConfig(config, resume));
   }, [client, dataset, network, seed, resetCount]);
 
   useEffect(() => {
@@ -76,5 +83,5 @@ export function useTrainingWorker(): { step: () => void } {
     };
   }, [client, running, speed]);
 
-  return { step: () => client.step() };
+  return { step: () => client.step(), requestCheckpoint: () => client.requestCheckpoint() };
 }

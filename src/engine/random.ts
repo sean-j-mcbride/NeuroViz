@@ -1,3 +1,10 @@
+/** The full internal state of an `Rng`, for saving and restoring a run exactly. */
+export interface RngState {
+  state: number;
+  /** The cached second Box–Muller sample, if one is pending. */
+  spare: number | null;
+}
+
 /**
  * Seeded pseudo-random number generator (mulberry32). Every source of
  * randomness in the engine goes through an `Rng` so runs are reproducible.
@@ -8,6 +15,16 @@ export class Rng {
 
   constructor(seed: number) {
     this.state = seed >>> 0;
+  }
+
+  getState(): RngState {
+    return { state: this.state, spare: this.spare };
+  }
+
+  /** Continues exactly where the generator that produced `s` left off. */
+  setState(s: RngState): void {
+    this.state = s.state >>> 0;
+    this.spare = s.spare;
   }
 
   /** Uniform float in [0, 1). */

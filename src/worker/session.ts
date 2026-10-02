@@ -8,6 +8,8 @@ import {
   Tensor,
   Trainer,
   addL2,
+  exportParams,
+  importParams,
   layerFromConfig,
   makeOptimiser,
 } from '../engine';
@@ -21,6 +23,7 @@ import {
   shuffleInPlace,
   splitTrainTest,
 } from '../data';
+import type { Checkpoint } from './checkpoint';
 import { HistogramTimeline, ParamHistory } from './history';
 import { INPUTS, type NetworkSpec, networkToLayerConfig } from './network';
 import type {
@@ -61,6 +64,11 @@ export interface SessionConfig extends Hyperparams {
   testFraction?: number;
   /** Resolution of the heatmap grid. Default 50. */
   gridSize?: number;
+  /**
+   * Continue from this checkpoint (taken from a session with the same data,
+   * network and seed) instead of starting at epoch 0.
+   */
+  resume?: Checkpoint;
 }
 
 /** A grid of G×G points covering the input domain, row 0 at the top. */
@@ -113,6 +121,13 @@ class History {
   copy(): Float32Array {
     return this.data.slice(0, this.length);
   }
+
+  /** Replaces the contents. */
+  load(values: Float32Array): void {
+    this.data = new Float32Array(Math.max(256, values.length * 2));
+    this.data.set(values);
+    this.length = values.length;
+  }
 }
 
 /**
@@ -138,6 +153,8 @@ export class TrainingSession {
    */
   private readonly columnLayers: { dense: number; end: number }[];
   private readonly shuffleRng: Rng;
+  /** Drew the initial weights; the dropout layers keep drawing their masks from it. */
+  private readonly initRng: Rng;
   private readonly order: Uint32Array;
   private readonly grid: Tensor;
   private readonly evalLoss = new BCEWithLogitsLoss();
@@ -166,6 +183,7 @@ export class TrainingSession {
 
     // Dropout layers share the init rng for their masks; they draw nothing until training.
     const rng = new Rng(seed);
+    this.initRng = rng;
     const model = layerFromConfig(networkToLayerConfig(network, config.dropout), rng);
     if (!(model instanceof Sequential)) throw new Error('TrainingSession: expected a Sequential');
     this.model = model;
@@ -192,7 +210,56 @@ export class TrainingSession {
     this.paramHistory = new ParamHistory(
       this.dense.map((d) => ({ W: d.W.value.size, b: d.b.value.size })),
     );
-    this.recordMetrics();
+    if (config.resume) this.restore(config.resume, config.optimiser);
+    else this.recordMetrics();
+  }
+
+  /** Everything needed to continue this run exactly (see `Checkpoint`). */
+  checkpoint(): Checkpoint {
+    return {
+      epoch: this.epoch,
+      step: this.step,
+      trainLoss: this.trainLoss.copy(),
+      testLoss: this.testLoss.copy(),
+      params: exportParams(this.model),
+      optimiser: this.trainer.optimiser.saveState(this.model.params()),
+      rng: { shuffle: this.shuffleRng.getState(), dropout: this.initRng.getState() },
+      order: this.order.slice(),
+    };
+  }
+
+  /**
+   * Picks up from a checkpoint. Optimiser state is restored only when it is
+   * for the configured optimiser (otherwise that optimiser starts fresh, as
+   * when switching mid-run). Histograms and sparklines restart from here.
+   */
+  private restore(c: Checkpoint, optimiser: Hyperparams['optimiser']): void {
+    const n = this.train.x.rows;
+    if (c.order.length !== n) {
+      throw new Error(`Checkpoint is for ${c.order.length} training points, not ${n}`);
+    }
+    const seen = new Uint8Array(n);
+    for (const i of c.order) {
+      if (i >= n || seen[i]) throw new Error('Checkpoint order is not a permutation');
+      seen[i] = 1;
+    }
+    if (c.trainLoss.length !== c.epoch + 1 || c.testLoss.length !== c.epoch + 1) {
+      throw new Error(`Checkpoint loss history does not cover epochs 0–${c.epoch}`);
+    }
+    importParams(this.model, c.params);
+    if (c.optimiser.kind === optimiser) {
+      this.trainer.optimiser.loadState(this.model.params(), c.optimiser);
+    }
+    this.shuffleRng.setState(c.rng.shuffle);
+    this.initRng.setState(c.rng.dropout);
+    this.order.set(c.order);
+    this.epoch = c.epoch;
+    this.step = c.step;
+    this.trainLoss.load(c.trainLoss);
+    this.testLoss.load(c.testLoss);
+    this.trainAccuracy = this.evaluate(this.train).accuracy;
+    this.testAccuracy = this.evaluate(this.test).accuracy;
+    this.observe();
   }
 
   private resolveBatchSize(b: Hyperparams['batchSize']): number {
@@ -248,6 +315,11 @@ export class TrainingSession {
     this.testLoss.push(te.loss);
     this.trainAccuracy = tr.accuracy;
     this.testAccuracy = te.accuracy;
+    this.observe();
+  }
+
+  /** Records the parameter history and (when due) the histogram timeline. Observation only. */
+  private observe(): void {
     this.paramHistory.record(
       this.epoch,
       this.dense.map((d) => ({ W: d.W.value.data, b: d.b.value.data })),

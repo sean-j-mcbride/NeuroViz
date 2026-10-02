@@ -1,13 +1,11 @@
-import { useAppStore } from '../state/store';
+import { DROPOUT_RATES, L2_STRENGTHS, OPTIMISER_NAMES, useAppStore } from '../state/store';
 import type { Hyperparams } from '../worker';
 
-const OPTIMISERS: { value: Hyperparams['optimiser']; label: string; title: string }[] = [
-  { value: 'sgd', label: 'SGD', title: 'Plain stochastic gradient descent' },
-  { value: 'momentum', label: 'Momentum', title: 'SGD with momentum (β = 0.9)' },
-  { value: 'adam', label: 'Adam', title: 'Adam (β₁ = 0.9, β₂ = 0.999)' },
+const OPTIMISERS: { value: Hyperparams['optimiser']; title: string }[] = [
+  { value: 'sgd', title: 'Plain stochastic gradient descent' },
+  { value: 'momentum', title: 'SGD with momentum (β = 0.9)' },
+  { value: 'adam', title: 'Adam (β₁ = 0.9, β₂ = 0.999)' },
 ];
-const L2_STRENGTHS = [0, 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1];
-const DROPOUT_RATES = [0, 0.1, 0.2, 0.3, 0.5];
 
 /** Optimiser and regularisation settings; all apply live without resetting training. */
 export function OptimiserControls() {
@@ -25,7 +23,7 @@ export function OptimiserControls() {
         >
           {OPTIMISERS.map((o) => (
             <option key={o.value} value={o.value} title={o.title}>
-              {o.label}
+              {OPTIMISER_NAMES[o.value]}
             </option>
           ))}
         </select>

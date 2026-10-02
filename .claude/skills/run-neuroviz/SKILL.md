@@ -84,6 +84,10 @@ says which one ran, e.g. `browser: chrome 154.0.8037.95`.
 | `pick [FX FY]`             | open step-through and pick the data point nearest (FX, FY) on the output plot (default 0.75 0.3) |
 | `next [N\|end]`            | advance step-through; prints the stage name and the neuron value badges                          |
 | `deep relu\|sigmoid\|tanh` | circle data, 6 hidden layers × 8 units, all one activation (the Phase 3 demo)                    |
+| `download NAME SELECTOR`   | click SELECTOR (e.g. `button:has-text("Save model")`) and save the download to the output dir    |
+| `upload FILE SELECTOR`     | give FILE to a hidden file input, e.g. `[aria-label="Model file to load"]`; prints the notice    |
+| `goto URL` / `reload`      | load a URL (e.g. a share link with a settings hash) / reload; waits for the first snapshot       |
+| `url`                      | the current address, including the settings hash the app keeps in step                           |
 | `workers`                  | URLs of running Web Workers (proves training is off the main thread)                             |
 | `errors`                   | console errors and page errors collected so far                                                  |
 

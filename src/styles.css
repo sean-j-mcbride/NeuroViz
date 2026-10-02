@@ -10,6 +10,9 @@
   --neg: #f59322;
   --train-line: #1d2129;
   --test-line: #9aa1ad;
+  /* A pinned run's curves; violet so it can't be read as a class colour (validated vs the lines above). */
+  --reference-line: #4a3aa7;
+  --error: #c93a3a;
   --radius: 8px;
   color-scheme: light;
   font-family:
@@ -33,6 +36,8 @@
     --pos: #3a9ad9;
     --train-line: #e6e8ec;
     --test-line: #7b8390;
+    --reference-line: #ab9ff5;
+    --error: #e66767;
     color-scheme: dark;
   }
 }
@@ -465,8 +470,20 @@ button.primary {
 
 .loss-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 4px 12px;
+}
+
+.loss-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin-top: 2px;
+}
+
+.legend-run {
+  color: var(--fg);
 }
 
 .loss-header .checkbox {
@@ -500,8 +517,30 @@ button.primary {
   border-top: 2px dashed var(--test-line);
 }
 
+.swatch.reference {
+  border-top-color: var(--reference-line);
+}
+
+.swatch.reference.test {
+  border-top: 2px dashed var(--reference-line);
+}
+
 .loss-curve {
+  position: relative;
   margin-top: 4px;
+}
+
+.loss-curve .crosshair {
+  position: absolute;
+  width: 1px;
+  background: var(--muted);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+button.pin {
+  margin-top: 8px;
+  font-size: 12px;
 }
 
 .loss-curve canvas {
@@ -786,4 +825,142 @@ button.toggle.on {
 
 .data-table thead th:first-child {
   text-align: left;
+}
+
+/* ---------- Save, load, presets, compare ---------- */
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin-bottom: 16px;
+}
+
+.notice.error {
+  border-left-color: var(--error);
+}
+
+.notice span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+button.close {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.preset-note {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--reference-line);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.preset-note-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.preset-note h2 {
+  margin: 0;
+}
+
+.preset-note p {
+  margin: 6px 0 0;
+  max-width: 90ch;
+}
+
+.preset-note-try {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.compare-panel {
+  margin-top: 16px;
+}
+
+.compare-panel .panel-toolbar {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.compare-panel .hint {
+  margin: 0;
+}
+
+.compare-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.compare-actions button {
+  font-size: 12px;
+}
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 400px) minmax(0, 320px) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 1000px) {
+  .compare-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.compare-boundaries {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.compare-boundaries figure {
+  margin: 0;
+}
+
+.compare-boundaries .decision-boundary {
+  margin-bottom: 6px;
+}
+
+.compare-boundaries figcaption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.compare-boundaries figcaption .swatch {
+  margin-left: 0;
+}
+
+.compare-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.compare-diff ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.compare-diff li {
+  margin-bottom: 2px;
+}
+
+.diff-label {
+  color: var(--muted);
 }

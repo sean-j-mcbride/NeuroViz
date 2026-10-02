@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Toy2DKind } from '../data';
+import { range } from '../data';
+import type { Checkpoint } from './checkpoint';
 import type { NetworkSpec } from './network';
 import { type SessionConfig, TrainingSession } from './session';
 
@@ -287,5 +289,76 @@ describe('deep sigmoid vs deep ReLU (the Phase 3 demonstration)', () => {
     // Measured: ReLU reaches 90 % in 9 epochs; sigmoid not within 600.
     expect(train(deep('relu'), 40).snapshot().trainAccuracy).toBeGreaterThanOrEqual(0.9);
     expect(train(deep('sigmoid'), 200).snapshot().trainAccuracy).toBeLessThan(0.75);
+  });
+});
+
+describe('checkpoints: exact resume', () => {
+  const N = 12;
+  const M = 12;
+  const cases = [
+    ['adam', { optimiser: 'adam', lr: 0.01, dropout: 0.2 }],
+    ['momentum', { optimiser: 'momentum', lr: 0.01, l2: 0.001 }],
+    ['sgd', { optimiser: 'sgd' }],
+  ] as const;
+
+  /** Trains N epochs, checkpoints, clones it across a (simulated) worker boundary, resumes and trains M more. */
+  function resumed(cfg: SessionConfig, tamper?: (c: Checkpoint) => void): TrainingSession {
+    const c = structuredClone(train(new TrainingSession(cfg), N).checkpoint());
+    tamper?.(c);
+    return train(new TrainingSession({ ...cfg, resume: c }), M);
+  }
+
+  it.each(cases)('%s: train N, save, resume, train M ≡ train N + M, bitwise', (_, overrides) => {
+    const cfg = config('spirals', { ...overrides, gridSize: 4 });
+    const straight = train(new TrainingSession(cfg), N + M);
+    const b = resumed(cfg);
+    expect(b.checkpoint()).toEqual(straight.checkpoint());
+    const [sa, sb] = [straight.snapshot(), b.snapshot()];
+    expect(sb.weights).toEqual(sa.weights);
+    expect(sb.trainLoss).toEqual(sa.trainLoss);
+    expect(sb.testLoss).toEqual(sa.testLoss);
+    expect([sb.epoch, sb.step, sb.trainAccuracy]).toEqual([sa.epoch, sa.step, sa.trainAccuracy]);
+  });
+
+  it('a resumed session reports the checkpoint epoch and history before training on', () => {
+    const cfg = config('circle', { gridSize: 4 });
+    const a = train(new TrainingSession(cfg), N);
+    const b = new TrainingSession({ ...cfg, resume: a.checkpoint() });
+    const [sa, sb] = [a.snapshot(), b.snapshot()];
+    expect(sb.epoch).toBe(N);
+    expect(sb.trainLoss).toEqual(sa.trainLoss);
+    expect(sb.trainAccuracy).toBe(sa.trainAccuracy);
+    expect(sb.timeline.epochs[0]).toBe(N);
+  });
+
+  // Mutation checks: each piece of saved state matters.
+  it.each([
+    ['the shuffle order', (c: Checkpoint) => c.order.set(range(c.order.length))],
+    ['the shuffle RNG', (c: Checkpoint) => (c.rng.shuffle = { state: 1, spare: null })],
+    ['the dropout RNG', (c: Checkpoint) => (c.rng.dropout = { state: 1, spare: null })],
+    ['the optimiser state', (c: Checkpoint) => (c.optimiser.t = 1)],
+  ])('dropping %s changes the continuation', (_, tamper) => {
+    const cfg = config('spirals', { optimiser: 'adam', lr: 0.01, dropout: 0.2, gridSize: 4 });
+    const straight = train(new TrainingSession(cfg), N + M).checkpoint();
+    expect(resumed(cfg, tamper).checkpoint().params).not.toEqual(straight.params);
+  });
+
+  it('starts the configured optimiser fresh if the checkpoint is for another', () => {
+    const adam = config('circle', { optimiser: 'adam', lr: 0.01, gridSize: 4 });
+    const c = train(new TrainingSession(adam), N).checkpoint();
+    const s = new TrainingSession({ ...adam, optimiser: 'sgd', resume: c });
+    expect(s.checkpoint().optimiser).toEqual({ kind: 'sgd', t: 0, slots: expect.any(Object) });
+  });
+
+  it('rejects a checkpoint from a different dataset size or network', () => {
+    const cfg = config('circle', { gridSize: 4 });
+    const c = train(new TrainingSession(cfg), 2).checkpoint();
+    expect(
+      () => new TrainingSession({ ...cfg, dataset: { ...cfg.dataset, n: 200 }, resume: c }),
+    ).toThrow(/280 training points, not 140/);
+    const wider: NetworkSpec = { hidden: [{ units: 4, activation: 'tanh' }, TANH_8_8.hidden[1]!] };
+    expect(() => new TrainingSession({ ...cfg, network: wider, resume: c })).toThrow(
+      /"0.W" has 16 values, expected 8/,
+    );
   });
 });

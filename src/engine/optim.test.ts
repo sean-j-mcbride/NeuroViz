@@ -122,3 +122,57 @@ describe('every optimiser', () => {
     expect(loss).toBeLessThan(0.05);
   });
 });
+
+describe('optimiser state', () => {
+  const grad = (w: Float32Array) => Array.from(w, (v, i) => (i + 1) * v - 0.3);
+  const named = (name: string, values: number[]): Param => ({ ...param(values), name });
+
+  it.each(['sgd', 'momentum', 'adam'] as const)(
+    '%s: save mid-run → load into a fresh optimiser → continues identically',
+    (kind) => {
+      const a = [named('0.W', [1, -2, 0.5]), named('0.b', [0.1])];
+      const original = makeOptimiser(kind, 0.05);
+      const step = (opt: Optimiser, ps: Param[]) => {
+        for (const p of ps) p.grad.data.set(grad(p.value.data));
+        opt.step(ps);
+      };
+      for (let s = 0; s < 7; s++) step(original, a);
+
+      const saved = original.saveState(a);
+      const b = a.map((p) => named(p.name, Array.from(p.value.data)));
+      const resumed = makeOptimiser(kind, 0.05);
+      resumed.loadState(b, saved);
+
+      for (let s = 0; s < 7; s++) {
+        step(original, a);
+        step(resumed, b);
+      }
+      a.forEach((p, i) => expect(b[i]!.value.data).toEqual(p.value.data));
+    },
+  );
+
+  it('saved state is a copy', () => {
+    const p = named('w', [1]);
+    const opt = new Momentum(0.1);
+    p.grad.data[0] = 1;
+    opt.step([p]);
+    const saved = opt.saveState([p]);
+    opt.step([p]);
+    expect(saved.slots['w']![0]![0]).toBe(1);
+  });
+
+  it('rejects state for another kind, a missing or unknown parameter, or a wrong size', () => {
+    const p = named('w', [1, 2]);
+    const adam = new Adam(0.1);
+    adam.step([p]);
+    const saved = adam.saveState([p]);
+    expect(() => new Momentum(0.1).loadState([p], saved)).toThrow(/adam, not momentum/);
+    expect(() => new Adam(0.1).loadState([named('v', [1, 2])], saved)).toThrow(
+      /unknown parameter "w"/,
+    );
+    expect(() => new Adam(0.1).loadState([p, named('v', [1])], saved)).toThrow(
+      /missing parameter "v"/,
+    );
+    expect(() => new Adam(0.1).loadState([named('w', [1, 2, 3])], saved)).toThrow(/expected 3/);
+  });
+});

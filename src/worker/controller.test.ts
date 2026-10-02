@@ -158,19 +158,43 @@ describe('TrainingController', () => {
     expect(b.snap().snapshot.weights).not.toEqual(a.snap().snapshot.weights);
   });
 
-  it('reports errors instead of throwing', () => {
+  it('reports errors instead of throwing, with the request id when there is one', () => {
     const { sent, send } = setup();
     send({ type: 'step' });
     expect(sent[0]!.message).toEqual({
       type: 'error',
       message: 'No training session: send init first',
     });
+    send({ type: 'checkpoint', requestId: 4 });
+    expect(sent[1]!.message).toMatchObject({ type: 'error', requestId: 4 });
+  });
+
+  it('answers checkpoint requests; init with resume continues from it', () => {
+    const { sent, send, snap } = setup();
+    send({ type: 'init', sessionId: 1, config: { ...CONFIG, optimiser: 'adam' } });
+    for (let i = 0; i < 3; i++) send({ type: 'step' });
+    send({ type: 'checkpoint', requestId: 9 });
+    const { message, transfer } = sent.at(-1)!;
+    if (message.type !== 'checkpoint')
+      throw new Error(`expected a checkpoint, got ${message.type}`);
+    expect([message.sessionId, message.requestId, message.checkpoint.epoch]).toEqual([1, 9, 3]);
+    // Losses, order, 4 params and 2 Adam slots per param.
+    expect(transfer).toHaveLength(3 + 4 + 8);
+
+    const checkpoint = structuredClone(message.checkpoint);
+    send({
+      type: 'init',
+      sessionId: 2,
+      config: { ...CONFIG, optimiser: 'adam', resume: checkpoint },
+    });
+    expect(snap().snapshot.epoch).toBe(3);
   });
 
   it('every message survives structured cloning', () => {
     const { sent, send, snap } = setup();
     send({ type: 'init', sessionId: 1, config: CONFIG });
     snap({ set: 'test', index: 2 });
+    send({ type: 'checkpoint', requestId: 99 });
     for (const { message } of sent) expect(structuredClone(message)).toEqual(message);
   });
 });

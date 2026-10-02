@@ -110,6 +110,22 @@ export interface Snapshot {
   probe?: ProbeTrace;
 }
 
+/** The output probability σ(logit) over the grid: what the decision boundary shows. */
+export interface OutputGrid {
+  /** G×G values, row 0 at the top (y = +domain). */
+  values: Float32Array;
+  gridSize: number;
+  domain: number;
+}
+
+export function outputGrid(s: Snapshot): OutputGrid {
+  return {
+    values: s.columns[s.columns.length - 1]!.values,
+    gridSize: s.gridSize,
+    domain: s.domain,
+  };
+}
+
 /** Every typed-array buffer in a snapshot, for a zero-copy `postMessage` transfer list. */
 export function snapshotBuffers(s: Snapshot): ArrayBuffer[] {
   const arrays: Float32Array[] = [
