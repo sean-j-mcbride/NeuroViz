@@ -161,3 +161,56 @@ XOR to MSE 2.3e-4 in 3000 full-batch steps (seed 42, lr 1), bitwise identically 
 
 - Matmul is a naive triple loop — fine for now; the Phase 5 performance pass should revisit it.
 - The ReLU gradient check keeps inputs at |x| ≥ 0.1 to stay away from the kink at 0.
+
+### Phase 2 — The 2D playground (2026-10-02)
+
+**Done:** Datasets (circle, XOR, two spirals, two Gaussians) with noise and size sliders and a
+seeded 70/30 train/test split. An architecture builder (0–6 hidden layers, 1–8 neurons each,
+tanh / ReLU / sigmoid / linear per layer). Play / pause / step (one epoch) / reset, with learning
+rate, batch size, speed and weight seed. Visualisations: SVG network graph (edge width = |w|,
+colour = sign, hover for values) whose neurons are drawn as mini heatmaps over the input plane,
+a canvas decision boundary with train (and optionally test) points, a hand-drawn train/test loss
+curve with a log-scale toggle, and a loss/accuracy table. Engine additions:
+`BCEWithLogitsLoss` (gradient-checked) and `layerFromConfig`. A seeded test trains 2-8-8-1 tanh
+on the spirals to ≥ 95 % train accuracy in 2000 epochs. In the browser this takes a few seconds
+(99.6 % train / 91.7 % test after ~7000 epochs). 76 tests.
+
+**Decisions:**
+
+- Training runs on the **main thread** this phase, through a DOM-free `TrainingSession`
+  (`src/worker/session.ts`) that emits structured-cloneable `Snapshot`s. The UI hook
+  (`ui/useTrainingLoop.ts`) drives it from `requestAnimationFrame` (N epochs/frame, or an 8 ms
+  budget at "Max") and publishes at most ~15 snapshots/s. Phase 3 only has to move the session
+  into a Worker. `src/worker` is now typechecked without DOM types and has the same import
+  boundary as engine/data. engine/data may not import from worker.
+- Binary head = linear `Dense(→1)` + fused `BCEWithLogitsLoss`, so the boundary shows σ(logit).
+- `NetworkSpec` (the compact hidden-layer description) and `networkToLayerConfig` live in
+  `worker/network.ts` rather than `state/`, because the session needs them and the boundary
+  rule forbids worker → state. Init is chosen per layer: He for ReLU, Xavier otherwise.
+- Domain ±6 (TF Playground convention), data radius 5. Noise is Gaussian position jitter
+  (std = 2·noise) with labels kept, so classes genuinely overlap. Clamped to the domain.
+- Defaults (spirals, lr 0.03, batch size 10, noise 0) come from a sweep. With plain SGD, lr 0.03 / batch
+  10 was the only setting where every seed tried (5 seeds, noise 0 and 0.1) reached ≥ 95 %.
+  Higher learning rates fit faster but oscillate.
+- One heatmap grid (G = 50, 2500 points) feeds both the neuron tiles and the decision boundary;
+  the canvas is drawn at native resolution and the browser's bilinear scaling smooths it.
+- Neuron colour normalisation is registered by column kind (`viz/colour.ts` `NORMALISERS`):
+  fixed ranges for tanh / sigmoid / output, per-neuron max-|v| for ReLU / linear.
+- Added a **Speed** control (not in the roadmap): at ~3000 epochs/s the spirals would otherwise
+  untangle too fast to watch. Default 5 epochs/frame.
+- Reset rebuilds from the same seed (reproducible); "New weights" and "Regenerate data" draw a
+  new seed with `Math.random` in the UI. That is the only non-seeded randomness, and the seed it
+  picks is shown.
+
+**Known issues:**
+
+- Layer buffers reallocate whenever the forward batch size changes (training batches vs. the
+  full-train/test evaluation each epoch vs. the grid). Harmless at this scale (~3300 epochs/s at
+  60 fps on spirals). Revisit in the Phase 5 performance pass.
+- Each snapshot copies the full loss history and the data points. Fine for tens of thousands
+  of epochs; downsample or send the data once when the worker protocol lands in Phase 3.
+- With noisy data the test loss can climb steeply while test accuracy stays high (over-confident
+  logits on overlapping points). This is real model behaviour, but it can surprise people. Phase 3's
+  L2 regularisation is the natural fix to demonstrate.
+- No component tests (no DOM test environment). The UI was checked by driving the dev and preview
+  builds in headless Chrome.

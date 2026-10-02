@@ -3,7 +3,7 @@ import { assertGradsOk, checkLayer, checkLoss, checkModel } from './gradcheck';
 import { ReLU, Sigmoid, Tanh } from './layers/activations';
 import { Dense } from './layers/dense';
 import type { Layer } from './layers/types';
-import { MSELoss, SoftmaxCrossEntropyLoss } from './losses';
+import { BCEWithLogitsLoss, MSELoss, SoftmaxCrossEntropyLoss } from './losses';
 import { Rng } from './random';
 import { Sequential } from './sequential';
 import { Tensor } from './tensor';
@@ -62,6 +62,23 @@ describe('loss gradient checks', () => {
     const value = loss.forward(Tensor.from([[1000, -1000, 0]]), oneHot([1], 3));
     expect(value).toBeCloseTo(2000, 3);
     expect(Array.from(loss.backward().data).every(Number.isFinite)).toBe(true);
+  });
+
+  it('sigmoid + binary cross-entropy', () => {
+    const rng = new Rng(7);
+    const logits = Tensor.randn([BATCH, 1], rng, 2);
+    const labels = Tensor.from([[0], [1], [1], [0], [1]]);
+    assertGradsOk(checkLoss(new BCEWithLogitsLoss(), logits, labels));
+  });
+
+  it('sigmoid + binary cross-entropy stays finite for huge logits', () => {
+    const loss = new BCEWithLogitsLoss();
+    // Confidently wrong on both rows: loss ≈ (100 + 100) / 2.
+    const value = loss.forward(Tensor.from([[100], [-100]]), Tensor.from([[0], [1]]));
+    expect(value).toBeCloseTo(100, 3);
+    expect(Array.from(loss.backward().data)).toEqual([0.5, -0.5]);
+    // Confidently right: loss ≈ 0, gradient ≈ 0.
+    expect(loss.forward(Tensor.from([[100], [-100]]), Tensor.from([[1], [0]]))).toBeLessThan(1e-12);
   });
 });
 

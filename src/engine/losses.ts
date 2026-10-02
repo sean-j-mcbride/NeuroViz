@@ -82,3 +82,39 @@ export class SoftmaxCrossEntropyLoss implements Loss {
     return this.grad;
   }
 }
+
+/**
+ * Sigmoid followed by binary cross-entropy, fused for numerical stability.
+ * `pred` holds logits z; `target` holds labels y ∈ [0, 1] of the same shape.
+ * Per element: max(z, 0) − z·y + log(1 + e^{−|z|}), averaged over every element.
+ * The gradient is (σ(z) − y) / N.
+ */
+export class BCEWithLogitsLoss implements Loss {
+  readonly kind = 'bce-with-logits';
+  private grad: Tensor | null = null;
+
+  forward(pred: Tensor, target: Tensor): number {
+    assertSameShape(this.kind, pred, target);
+    if (this.grad?.size !== pred.size) this.grad = Tensor.zeros(pred.shape);
+    const n = pred.size;
+    const z = pred.data;
+    const y = target.data;
+    const g = this.grad.data;
+    let total = 0;
+    for (let i = 0; i < n; i++) {
+      const zi = z[i]!;
+      const yi = y[i]!;
+      const e = Math.exp(-Math.abs(zi));
+      total += Math.max(zi, 0) - zi * yi + Math.log1p(e);
+      // σ(z) computed from e = e^{−|z|} so it never overflows.
+      const sig = zi >= 0 ? 1 / (1 + e) : e / (1 + e);
+      g[i] = (sig - yi) / n;
+    }
+    return total / n;
+  }
+
+  backward(): Tensor {
+    if (!this.grad) throw new Error('bce-with-logits: backward called before forward');
+    return this.grad;
+  }
+}

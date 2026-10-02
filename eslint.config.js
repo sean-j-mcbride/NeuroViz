@@ -8,20 +8,11 @@ const engineBoundary = {
   patterns: [
     {
       group: ['react', 'react-dom', 'react/*', 'zustand', 'zustand/*'],
-      message: 'engine/ and data/ must stay framework-free (they run in a Web Worker).',
+      message: 'engine/, data/ and worker/ must stay framework-free (they run in a Web Worker).',
     },
     {
-      group: [
-        '**/viz',
-        '**/viz/*',
-        '**/ui',
-        '**/ui/*',
-        '**/state',
-        '**/state/*',
-        '**/worker',
-        '**/worker/*',
-      ],
-      message: 'engine/ and data/ must not depend on app layers.',
+      group: ['**/viz', '**/viz/*', '**/ui', '**/ui/*', '**/state', '**/state/*'],
+      message: 'engine/, data/ and worker/ must not depend on viz, ui or state.',
     },
   ],
 };
@@ -41,7 +32,25 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/engine/**/*.ts', 'src/data/**/*.ts'],
+    files: ['src/engine/**/*.ts', 'src/data/**/*.ts', 'src/worker/**/*.ts'],
     rules: { 'no-restricted-imports': ['error', engineBoundary] },
+  },
+  {
+    // The engine and data layers must not reach up into the training session either.
+    files: ['src/engine/**/*.ts', 'src/data/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            ...engineBoundary.patterns,
+            {
+              group: ['**/worker', '**/worker/*'],
+              message: 'engine/ and data/ must not depend on worker/.',
+            },
+          ],
+        },
+      ],
+    },
   },
 );

@@ -1,12 +1,12 @@
 {
-  // Engine + data must run unchanged in a Web Worker: no DOM types here,
-  // so any accidental DOM use fails typecheck.
+  // Engine, data and the training session must run unchanged in a Web Worker:
+  // no DOM types here, so any accidental DOM use fails typecheck.
   "extends": "./tsconfig.app.json",
   "compilerOptions": {
     "lib": ["ES2022"],
     "types": []
   },
-  "include": ["src/engine", "src/data"],
+  "include": ["src/engine", "src/data", "src/worker"],
   // Tests run under Node via Vitest and are typechecked by tsconfig.app.json.
   "exclude": ["src/**/*.test.ts"]
 }

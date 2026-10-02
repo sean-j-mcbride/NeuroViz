@@ -1,3 +1,4 @@
+export * from './build';
 export * from './gradcheck';
 export * from './init';
 export * from './layers/activations';
