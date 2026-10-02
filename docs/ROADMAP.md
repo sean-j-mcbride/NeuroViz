@@ -300,8 +300,8 @@ thinning backward edges make it visible. 160 tests.
 
 **Known issues:**
 
-- Each snapshot still copies the full loss history and runs one extra full-batch
-  forward/backward. Both are cheap at this scale; revisit for MNIST in Phase 5.
+- ~~Each snapshot still copies the full loss history~~ (bounded since the Phase 4 follow-up) and
+  runs one extra full-batch forward/backward. Cheap at this scale; revisit for MNIST in Phase 5.
 - Weights beyond ±50 still land in the edge bins (the tooltip says "and below" / "and above").
 - With plain SGD, the full-batch gradient RMS line is spiky: weights move between records. This
   is real behaviour, not a rendering artefact.
@@ -379,13 +379,73 @@ table of scores and the settings that changed. 235 tests.
 
 **Known issues:**
 
-- After a load, the histogram timeline and the hover sparklines restart at the loaded epoch.
-  They are observations, so they aren't saved.
-- Model files grow with the loss history: ~18 KB at 600 epochs, roughly 2 MB at 100,000.
-- A pinned run records its final settings only. If hyperparameters were changed mid-run, the
-  diff shows where they ended up.
-- One noisy Adam spike can squash the linear loss axis (the Overfitting preset reaches 13); the
-  log-scale toggle helps.
-- Dead ReLUs are visible as blank tiles and in the bottom gradient bin, but no neuron is
-  explicitly flagged as dead.
-- Speed and "Show test data" are not part of the link.
+All six were fixed in the follow-up below.
+
+- ~~After a load, the histogram timeline and the hover sparklines restart at the loaded epoch.~~
+- ~~Model files grow with the loss history: ~18 KB at 600 epochs, roughly 2 MB at 100,000.~~
+- ~~A pinned run records its final settings only.~~
+- ~~One noisy Adam spike can squash the linear loss axis.~~
+- ~~Dead ReLUs are visible as blank tiles and in the bottom gradient bin, but no neuron is
+  explicitly flagged as dead.~~
+- ~~Speed and "Show test data" are not part of the link.~~
+
+### Phase 4 follow-up — the six known issues (2026-10-02)
+
+**Done** (one commit each, in this order):
+
+1. **Links carry the view.** `speed=…&showTest=0|1` join the hash. A link whose settings are a
+   preset (or its fix) opens with that preset's note.
+2. **One spike no longer squashes the loss chart.** On a linear scale the top of the axis is
+   1.25 × the 98th percentile, but never below any curve's starting or latest value, so the
+   early descent and the current state always show. Anything higher is drawn along the top, and
+   the chart says "Clipped above 4.6 (peak 13)". Log scale keeps the full range.
+3. **Dead ReLUs are flagged.** A ReLU neuron that outputs 0 for every training point is marked in
+   the snapshot, found during the existing full-batch gradient pass at no extra cost. Dead
+   neurons are hatched in the graph, counted in the column label ("Hidden 1 · 5 dead"),
+   explained on hover and counted in the Inside training table.
+4. **Mid-run setting changes are recorded.** The session logs the settings in force from each
+   epoch, and the log is in snapshots, checkpoints and files. The loss curve marks changes with
+   ticks (described on hover), and the Compare panel lists each run's changes.
+5. **The charts' history survives save and load,** bitwise, including across a timeline
+   compaction.
+6. **Bounded loss history.** Every epoch is kept for the first 4,096; then neighbouring buckets
+   merge (mean, min, max) and the width doubles. The latest and lowest losses stay exact. The
+   chart draws at most ~2 points per pixel, each with a faint min–max band, so spikes survive on
+   long runs. The tooltip gives a merged bucket's mean, range and epochs. 290 tests.
+
+**Decisions:**
+
+- **Model-file format 2** brings the settings log, the `history` block and the bucketed `losses`.
+  Version 1 files still load: their per-epoch losses are replayed, which is exact because the
+  session now always records float32-rounded losses (the values it always stored). The settings
+  are taken as unchanged through the run, and the charts restart.
+- **The `history` block is compact by choice** (agreed in planning). Histograms are whole counts
+  per bin, 1, 2 or 4 bytes wide by layer size. RMS values and the sparkline ring are float32. All
+  are little-endian base64. Everything else in the file stays readable. For that to be exact,
+  `histogramInto` now counts whole numbers and then divides, instead of adding 1/n repeatedly.
+- **Measured file sizes** at 600 epochs: ~97 KB for the default 2×8 net (80 KB of it chart
+  history) and ~284 KB for 6×8, where ~210 KB is the 100-epoch sparkline ring. Loss curves top
+  out near 270 KB whatever the run length (a 100,000-epoch run used to need ~2.3 MB). Until
+  buckets merge, only the means are written, since min = max = mean.
+- **"Dead" means dead on the training set**, not on the plotted plane, which also covers points
+  outside the data. A hatched tile can therefore still show some colour away from the data. The
+  Dead ReLUs preset test now uses these flags. Re-measured on seeds 1–5: 53–72 % dead, and
+  3–19 % with the fix, so its "Then try" text now says "under a fifth" rather than "almost every
+  neuron".
+- **The settings log de-duplicates.** The UI re-sends unchanged settings. Several changes within
+  one epoch keep only the last, and changing back removes the entry. A resume with different
+  settings logs the change at the checkpoint's epoch.
+- **Long-run speed is unchanged:** about 4,600 epochs/s at Max on the spirals, as in Phase 3.
+- The run-neuroviz driver gained `move SELECTOR FX FY`, which points at a spot on a canvas (used
+  to check the change-tick tooltip).
+
+**Known issues:**
+
+- The 6×8 network's sparkline history dominates its file size (~210 KB). Shortening the hover
+  history, or saving it at lower precision, would shrink it if that matters.
+- The clipping rule can still cut a genuine late climb taller than 1.25 × the 98th percentile
+  that isn't at the very end; the label says so and the log scale shows it all.
+- Reference ticks sit slightly above this run's ticks so both stay visible. With many changes,
+  the x-axis can get busy.
+- Loading a reference from a file still rebuilds its session on the main thread (milliseconds at
+  this scale).
