@@ -179,28 +179,53 @@ const commands = {
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: Number(rate) });
     return {};
   },
-  /** pick — open step-through and click the output plot until a data point is picked. */
-  async pick() {
+  /**
+   * pick [FX FY] — open step-through and pick the data point drawn nearest to
+   * (FX, FY), fractions of the output plot from its top-left (default 0.75 0.3:
+   * upper right, well away from the origin, whose zero inputs make a dull trace).
+   * Finds points by their fill colour in the overlay canvas, so it never misses.
+   */
+  async pick(fx = '0.75', fy = '0.3') {
     if (!(await page.locator('.step-through').count()))
       await page.click('button:has-text("Step through")');
-    const db = await page.locator('.decision-boundary .points').boundingBox();
-    const spots = [
-      [0.5, 0.5],
-      [0.45, 0.5],
-      [0.55, 0.45],
-      [0.4, 0.4],
-      [0.6, 0.6],
-      [0.3, 0.5],
-      [0.7, 0.5],
-      [0.5, 0.3],
-    ];
-    for (const [fx, fy] of spots) {
-      await page.mouse.click(db.x + db.width * fx, db.y + db.height * fy);
-      await page.waitForTimeout(250);
-      if (await page.locator('.step-through-point').count())
-        return { picked: await page.innerText('.step-through-point') };
-    }
-    return { picked: null };
+    const canvas = page.locator('.decision-boundary .points');
+    const target = await canvas.evaluate(
+      (el, [tx, ty]) => {
+        const { width: w, height: h } = el;
+        const px = el.getContext('2d').getImageData(0, 0, w, h).data;
+        // Point fills: orange (label 0) and blue (label 1), as in viz/colour.ts.
+        const fills = [
+          [245, 147, 34],
+          [8, 119, 189],
+        ];
+        const isFill = (i) =>
+          px[i + 3] > 200 &&
+          fills.some(
+            ([r, g, b]) =>
+              Math.abs(px[i] - r) + Math.abs(px[i + 1] - g) + Math.abs(px[i + 2] - b) < 30,
+          );
+        let best = null;
+        let bestD = Infinity;
+        for (let y = 0; y < h; y += 2) {
+          for (let x = 0; x < w; x += 2) {
+            if (!isFill((y * w + x) * 4)) continue;
+            const d = (x / w - tx) ** 2 + (y / h - ty) ** 2;
+            if (d < bestD) [best, bestD] = [{ fx: x / w, fy: y / h }, d];
+          }
+        }
+        return best;
+      },
+      [Number(fx), Number(fy)],
+    );
+    if (!target) return { picked: null, error: 'no data points drawn on the output plot' };
+    const box = await canvas.boundingBox();
+    await page.mouse.click(box.x + box.width * target.fx, box.y + box.height * target.fy);
+    await page.waitForTimeout(300);
+    return {
+      picked: (await page.locator('.step-through-point').count())
+        ? await page.innerText('.step-through-point')
+        : null,
+    };
   },
   /** next [N|end] — advance step-through N stages (default 1) or to the last one. */
   async next(n = '1') {

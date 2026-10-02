@@ -229,7 +229,7 @@ the probe values while step-through is open. **Inside training panel:** gradient
 over the run (log axis), plus per-layer weight and log-|gradient| histograms over time.
 Done-when: on the circle, a 6×8 sigmoid net's first-layer gradient is ~3e-4 of the output
 layer's, against ~0.1 for ReLU. ReLU reaches 90 % in ~9 epochs; sigmoid is still at chance after 600. A seeded test asserts both, and in the browser the fan-out of the gradient lines and the
-thinning backward edges make it visible. 123 tests.
+thinning backward edges make it visible. 160 tests.
 
 **Decisions:**
 
@@ -271,6 +271,14 @@ thinning backward edges make it visible. 123 tests.
   first ÷ last ratio column.
 - **Snapshots carry the L2 strength**, so the edge hover card says ∂(L + L2)/∂w when L2 is on. Bias
   gradients never include L2.
+- **The worker hook's logic lives in a DOM-free `TrainingClient`** (`ui/trainingClient.ts`); the
+  hook only wires it to React. Its tests cover the one-in-flight rule, the queued request, the
+  66 ms throttle, dropping stale-session replies and probe attachment. They also run it against the
+  real `TrainingController` through a simulated channel that structured-clones every message.
+  Mutation checks (removing the stale-session guard or the in-flight guard) make them fail.
+- **Component tests** use jsdom and Testing Library, opted into per file with
+  `// @vitest-environment jsdom`. Everything else stays in the faster Node environment.
+  `src/test/setup.ts` stubs ResizeObserver, matchMedia and canvas for jsdom.
 - **Hover cost was measured, not assumed.** The driver's `sweep` command moves the mouse across a
   6×8 graph (~700 SVG paths, re-rendered on every move) at about 60 moves/s. Paused or training at
   Max, and even at 4× CPU throttle, the page held 60 fps with no frame over 17 ms, so there is no
@@ -296,5 +304,6 @@ thinning backward edges make it visible. 123 tests.
 - Right after Pause, the epoch readout can trail the true stopping point by one snapshot. A
   request may already be in flight, and the final snapshot follows it.
 - Momentum β and Adam β₁/β₂ are fixed in the UI (configurable in the engine).
-- There are still no component tests. The UI was checked by driving the dev server and the static
-  preview build (light and dark) in headless Chrome.
+- Component tests cover the network graph, step-through bar, tables, point picking and store
+  logic, but not canvas drawing (jsdom has no 2D context, so heatmaps, the decision boundary and
+  charts are only checked in the browser driver's screenshots).

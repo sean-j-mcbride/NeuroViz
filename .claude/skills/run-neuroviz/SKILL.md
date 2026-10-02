@@ -69,23 +69,23 @@ to `http://localhost:5173`. Screenshots go to `$TMPDIR/neuroviz-shots/<name>.png
 bundled Chromium if Chrome won't launch; `--browser chromium` forces it. The first stderr line
 says which one ran, e.g. `browser: chrome 154.0.8037.95`.
 
-| command                    | what it does                                                                             |
-| -------------------------- | ---------------------------------------------------------------------------------------- |
-| `shot NAME [SELECTOR]`     | full-page screenshot, or just one element                                                |
-| `click SELECTOR`           | Playwright selector, e.g. `button:has-text("Step")`, `[aria-label="Add a hidden layer"]` |
-| `select SELECTOR VALUE`    | choose a `<select>` option (the last word is the value)                                  |
-| `hover SELECTOR`           | move the mouse to the element's centre and print any tooltip text                        |
-| `text SELECTOR`            | print the element's text                                                                 |
-| `wait MS`                  | sleep                                                                                    |
-| `play MS`                  | Play, wait, Pause, let the last snapshot land; prints the epoch and loss/accuracy table  |
-| `measure`                  | while training: epochs/s, readout updates/s (≈ snapshots/s) and main-thread fps over 2 s |
-| `sweep [MS]`               | sweep the mouse over the network graph (hover cost): fps, worst frame, number of moves   |
-| `throttle RATE`            | slow the page CPU RATE× via CDP (1 = off), to mimic a slower machine                     |
-| `pick`                     | open step-through and click the output plot until a data point is picked                 |
-| `next [N\|end]`            | advance step-through; prints the stage name and the neuron value badges                  |
-| `deep relu\|sigmoid\|tanh` | circle data, 6 hidden layers × 8 units, all one activation (the Phase 3 demo)            |
-| `workers`                  | URLs of running Web Workers (proves training is off the main thread)                     |
-| `errors`                   | console errors and page errors collected so far                                          |
+| command                    | what it does                                                                                     |
+| -------------------------- | ------------------------------------------------------------------------------------------------ |
+| `shot NAME [SELECTOR]`     | full-page screenshot, or just one element                                                        |
+| `click SELECTOR`           | Playwright selector, e.g. `button:has-text("Step")`, `[aria-label="Add a hidden layer"]`         |
+| `select SELECTOR VALUE`    | choose a `<select>` option (the last word is the value)                                          |
+| `hover SELECTOR`           | move the mouse to the element's centre and print any tooltip text                                |
+| `text SELECTOR`            | print the element's text                                                                         |
+| `wait MS`                  | sleep                                                                                            |
+| `play MS`                  | Play, wait, Pause, let the last snapshot land; prints the epoch and loss/accuracy table          |
+| `measure`                  | while training: epochs/s, readout updates/s (≈ snapshots/s) and main-thread fps over 2 s         |
+| `sweep [MS]`               | sweep the mouse over the network graph (hover cost): fps, worst frame, number of moves           |
+| `throttle RATE`            | slow the page CPU RATE× via CDP (1 = off), to mimic a slower machine                             |
+| `pick [FX FY]`             | open step-through and pick the data point nearest (FX, FY) on the output plot (default 0.75 0.3) |
+| `next [N\|end]`            | advance step-through; prints the stage name and the neuron value badges                          |
+| `deep relu\|sigmoid\|tanh` | circle data, 6 hidden layers × 8 units, all one activation (the Phase 3 demo)                    |
+| `workers`                  | URLs of running Web Workers (proves training is off the main thread)                             |
+| `errors`                   | console errors and page errors collected so far                                                  |
 
 Deep sigmoid vs ReLU, on the static build in dark mode:
 
@@ -157,9 +157,10 @@ All of these must pass at the end of each phase (CLAUDE.md).
 - **Edges are hovered through `.edge-hit`,** an invisible 8 px stroke over each visible `.edge`.
   Tooltips are `position: fixed` and appear only on mousemove, so use `hover` (it moves the
   mouse). Playwright's `locator.hover()` also works for `.neuron`.
-- **Picking a step-through point needs a click within 10 px of a data point.** `pick` tries a
-  fixed list of spots. On the spirals and circle the centre spot (0, 0) usually hits. That point
-  sits at the input origin, so input → H1 edges show w·a = 0 (thin), and that's expected.
+- **Picking a step-through point needs a click within 10 px of a data point.** `pick` finds the
+  points by their orange/blue fill in the overlay canvas, then clicks the one nearest the target,
+  so it never misses. Avoid targeting the centre: on the spirals there is a point at (0, 0), and
+  zero inputs make every input → H1 edge carry w·a = 0 and ∂L/∂w = 0 (a dull trace).
 - **`.transport select >> nth=2` is the Speed select.** The optimiser row also has class
   `transport`, so its selects come after it (nth 3–5). The selector `.optimiser-controls select`
   is less fragile for those.
