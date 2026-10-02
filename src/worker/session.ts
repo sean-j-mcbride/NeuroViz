@@ -374,6 +374,7 @@ export class TrainingSession {
       gridSize: this.gridSize,
       columns,
       weights,
+      l2: this.trainer.l2,
       timeline: this.timeline.snapshot(),
       paramHistory: this.paramHistory.snapshot(),
       ...(probe && { probe }),

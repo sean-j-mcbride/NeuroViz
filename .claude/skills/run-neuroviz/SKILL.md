@@ -79,6 +79,8 @@ says which one ran, e.g. `browser: chrome 154.0.8037.95`.
 | `wait MS`                  | sleep                                                                                    |
 | `play MS`                  | Play, wait, Pause, let the last snapshot land; prints the epoch and loss/accuracy table  |
 | `measure`                  | while training: epochs/s, readout updates/s (≈ snapshots/s) and main-thread fps over 2 s |
+| `sweep [MS]`               | sweep the mouse over the network graph (hover cost): fps, worst frame, number of moves   |
+| `throttle RATE`            | slow the page CPU RATE× via CDP (1 = off), to mimic a slower machine                     |
 | `pick`                     | open step-through and click the output plot until a data point is picked                 |
 | `next [N\|end]`            | advance step-through; prints the stage name and the neuron value badges                  |
 | `deep relu\|sigmoid\|tanh` | circle data, 6 hidden layers × 8 units, all one activation (the Phase 3 demo)            |

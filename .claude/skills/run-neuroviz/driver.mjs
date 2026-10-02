@@ -144,6 +144,41 @@ const commands = {
     );
     return { ...r, epochsPerSec: ((await epoch()) - e1) / 2 };
   },
+  /** sweep [MS] — move the mouse back and forth across the network graph (hover cost): fps, worst frame. */
+  async sweep(ms = '2000') {
+    const box = await page.locator('.network-canvas').boundingBox();
+    await page.evaluate((duration) => {
+      window.__sweep = new Promise((resolve) => {
+        const gaps = [];
+        let prev = performance.now();
+        const t0 = prev;
+        const f = (now) => {
+          gaps.push(now - prev);
+          prev = now;
+          if (now - t0 < duration) requestAnimationFrame(f);
+          else resolve({ fps: gaps.length / (duration / 1000), worstFrameMs: Math.max(...gaps) });
+        };
+        requestAnimationFrame(f);
+      });
+    }, Number(ms));
+    const end = Date.now() + Number(ms);
+    let tooltips = 0;
+    let moves = 0;
+    for (let i = 0; Date.now() < end; i++, moves++) {
+      const f = (i % 100) / 100;
+      const x = box.x + box.width * (i % 200 < 100 ? f : 1 - f);
+      await page.mouse.move(x, box.y + box.height * (0.3 + 0.4 * f));
+      if (i % 20 === 0 && (await page.locator('.tooltip').count())) tooltips++;
+    }
+    const r = await page.evaluate(() => window.__sweep);
+    return { ...r, worstFrameMs: Math.round(r.worstFrameMs), moves, tooltipChecksHit: tooltips };
+  },
+  /** throttle RATE — slow the page's CPU by RATE× (1 = off), to mimic a slower machine. Chrome/Chromium only. */
+  async throttle(rate) {
+    const cdp = await ctx.newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: Number(rate) });
+    return {};
+  },
   /** pick — open step-through and click the output plot until a data point is picked. */
   async pick() {
     if (!(await page.locator('.step-through').count()))

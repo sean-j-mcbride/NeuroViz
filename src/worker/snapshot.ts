@@ -100,6 +100,8 @@ export interface Snapshot {
   columns: NeuronColumn[];
   /** One per dense layer: `weights[k]` connects `columns[k]` to `columns[k + 1]`. */
   weights: DenseWeights[];
+  /** L2 strength λ when the snapshot was taken; when > 0, `gradW` and the timeline's gradients include λ·W. */
+  l2: number;
   /** Weight / gradient histograms and RMS per dense layer over the whole run. */
   timeline: TimelineSnapshot;
   /** Recent per-parameter values, for sparklines. */

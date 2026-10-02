@@ -1,28 +1,55 @@
-/** Histogram bins: `count` equal-width bins covering [lo, hi]. */
+/**
+ * How values map onto the bin axis before equal-width binning.
+ * - `asinh`: t = asinh(v / unit): linear for |v| ≪ unit, logarithmic beyond,
+ *   and it keeps the sign. Suits weights, which span ±0.01 to ±50.
+ * - `log10-abs`: t = log10|v|. Suits gradient magnitudes, which span decades.
+ */
+export type BinScale = { kind: 'asinh'; unit: number } | { kind: 'log10-abs' };
+
+/** Histogram bins: `count` equal-width bins covering [lo, hi] on the `scale` axis. */
 export interface BinSpec {
   lo: number;
   hi: number;
   count: number;
+  scale: BinScale;
 }
 
-/** Weights, linear scale. Values outside the range land in the edge bins. */
-export const WEIGHT_BINS: BinSpec = { lo: -4, hi: 4, count: 32 };
-/** Gradients on a log scale: bins over log10|g|. Zeros (and anything tinier) land in the bottom bin. */
-export const GRAD_BINS: BinSpec = { lo: -10, hi: 1, count: 32 };
+/** Value → bin axis. */
+export function toBinAxis(v: number, scale: BinScale): number {
+  if (scale.kind === 'asinh') return Math.asinh(v / scale.unit);
+  return v === 0 ? -Infinity : Math.log10(Math.abs(v));
+}
 
-function binIndex(v: number, { lo, hi, count }: BinSpec): number {
-  const k = Math.floor(((v - lo) / (hi - lo)) * count);
+/** Bin axis → value (for `log10-abs`, the magnitude). */
+export function fromBinAxis(t: number, scale: BinScale): number {
+  return scale.kind === 'asinh' ? scale.unit * Math.sinh(t) : 10 ** t;
+}
+
+const WEIGHT_SCALE: BinScale = { kind: 'asinh', unit: 0.05 };
+const WEIGHT_LIMIT = toBinAxis(50, WEIGHT_SCALE);
+
+/**
+ * Weights on a signed-log axis covering ±50 (each bin ≈ ×1.5 wide for |w| ≳ 0.1,
+ * linear below 0.05). Values beyond ±50 land in the edge bins.
+ */
+export const WEIGHT_BINS: BinSpec = {
+  lo: -WEIGHT_LIMIT,
+  hi: WEIGHT_LIMIT,
+  count: 40,
+  scale: WEIGHT_SCALE,
+};
+/** Gradients on a log scale: bins over log10|g|. Zeros (and anything tinier) land in the bottom bin. */
+export const GRAD_BINS: BinSpec = { lo: -10, hi: 1, count: 32, scale: { kind: 'log10-abs' } };
+
+function binIndex(t: number, { lo, hi, count }: BinSpec): number {
+  const k = Math.floor(((t - lo) / (hi - lo)) * count);
   return k < 0 ? 0 : k >= count ? count - 1 : k;
 }
 
-/**
- * Writes the fraction of `values` in each bin into `out[offset .. offset + count)`.
- * With `logAbs`, bins log10|v| instead of v.
- */
+/** Writes the fraction of `values` in each bin into `out[offset .. offset + count)`. */
 export function histogramInto(
   values: Float32Array,
   spec: BinSpec,
-  logAbs: boolean,
   out: Float32Array,
   offset: number,
 ): void {
@@ -30,9 +57,7 @@ export function histogramInto(
   if (values.length === 0) return;
   const unit = 1 / values.length;
   for (let i = 0; i < values.length; i++) {
-    const v = values[i]!;
-    const x = logAbs ? (v === 0 ? -Infinity : Math.log10(Math.abs(v))) : v;
-    out[offset + binIndex(x, spec)]! += unit;
+    out[offset + binIndex(toBinAxis(values[i]!, spec.scale), spec)]! += unit;
   }
 }
 
@@ -106,8 +131,8 @@ export class HistogramTimeline {
     this.epochs[t] = epoch;
     samples.forEach((s, k) => {
       const l = this.layers[k]!;
-      histogramInto(s.W, WEIGHT_BINS, false, l.weightHist, t * WEIGHT_BINS.count);
-      histogramInto(s.gradW, GRAD_BINS, true, l.gradHist, t * GRAD_BINS.count);
+      histogramInto(s.W, WEIGHT_BINS, l.weightHist, t * WEIGHT_BINS.count);
+      histogramInto(s.gradW, GRAD_BINS, l.gradHist, t * GRAD_BINS.count);
       l.weightRms[t] = rms(s.W);
       l.gradRms[t] = rms(s.gradW);
     });

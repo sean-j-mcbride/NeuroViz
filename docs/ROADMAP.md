@@ -259,9 +259,22 @@ thinning backward edges make it visible. 123 tests.
   snapshot and at every timeline record.
 - **The histogram timeline** keeps 128 columns. When full it **drops every other column and doubles
   the interval** instead of averaging pairs (a change from the plan), so each column is an exact
-  moment and the extra measurement cost grows only as O(log epochs). Weights use 32 bins over ±4,
-  with overflow clamped into the edge bins (the tooltip says "and beyond"). Gradients use 32 bins
-  over log10|g| ∈ [−10, 1], with zeros in the bottom bin; dead ReLUs show up there.
+  moment and the extra measurement cost grows only as O(log epochs). Weights use 40 bins on a
+  **signed-log axis**, asinh(w / 0.05), covering ±50. It is linear below |w| ≈ 0.05 and about
+  ×1.5 per bin above 0.1, with dotted guides at ±1. A first version used linear bins over ±4, but
+  the spirals' output-layer weights (~±10) piled into the edge bins. Gradients use 32 bins over
+  log10|g| ∈ [−10, 1], with zeros in the bottom bin; dead ReLUs show up there.
+- **Every chart has a table view** (Charts / Table toggle on the Inside training panel), per the
+  dataviz rule that identity and values never depend on colour or hover alone. The tables show
+  per-layer weight RMS, gradient RMS and the share of |w| > 1 and of gradients below 10⁻⁶ (read
+  from the histograms, so accurate to about one bin), plus gradient RMS over time with a
+  first ÷ last ratio column.
+- **Snapshots carry the L2 strength**, so the edge hover card says ∂(L + L2)/∂w when L2 is on. Bias
+  gradients never include L2.
+- **Hover cost was measured, not assumed.** The driver's `sweep` command moves the mouse across a
+  6×8 graph (~700 SVG paths, re-rendered on every move) at about 60 moves/s. Paused or training at
+  Max, and even at 4× CPU throttle, the page held 60 fps with no frame over 17 ms, so there is no
+  memoisation yet.
 - **The probe** is one example in evaluation mode with data loss only. At the output the view
   shows ∂L/∂z = p − y; `dA` there is ∂L/∂p with p clamped. In step-through, backward edge widths
   are logarithmic over four decades, relative to the largest ∂L/∂w in the whole trace rather than
@@ -277,8 +290,7 @@ thinning backward edges make it visible. 123 tests.
 
 - Each snapshot still copies the full loss history and runs one extra full-batch
   forward/backward. Both are cheap at this scale; revisit for MNIST in Phase 5.
-- Weight histograms use a fixed ±4 range, so very large weights pile into the edge bins, and
-  slow-moving (e.g. sigmoid) layers look static at 0.25-wide bins.
+- Weights beyond ±50 still land in the edge bins (the tooltip says "and below" / "and above").
 - With plain SGD, the full-batch gradient RMS line is spiky: weights move between records. This
   is real behaviour, not a rendering artefact.
 - Right after Pause, the epoch readout can trail the true stopping point by one snapshot. A

@@ -242,7 +242,10 @@ function HoverCard({
     const title = `${neuronLabel(columns[k]!, k, i)} → ${neuronLabel(columns[k + 1]!, k + 1, j)}`;
     const rows: [string, string][] = [
       ['Weight', formatPrecise(layer.W[idx]!)],
-      ['∂L/∂w (all training data)', formatPrecise(layer.gradW[idx]!)],
+      [
+        snapshot.l2 > 0 ? '∂(L + L2)/∂w (all training data)' : '∂L/∂w (all training data)',
+        formatPrecise(layer.gradW[idx]!),
+      ],
     ];
     if (probe) {
       rows.push(['w · a (this point)', formatPrecise(layer.W[idx]! * probe.columns[k]!.a[i]!)]);

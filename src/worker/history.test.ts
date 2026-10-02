@@ -4,22 +4,41 @@ import {
   HistogramTimeline,
   ParamHistory,
   WEIGHT_BINS,
+  fromBinAxis,
   histogramInto,
   rms,
+  toBinAxis,
 } from './history';
 
 const f32 = (...v: number[]) => Float32Array.from(v);
 
 describe('histogramInto', () => {
-  it('bins fractions, clamping out-of-range values into the edge bins', () => {
-    const out = new Float32Array(4);
-    histogramInto(f32(-10, -0.5, 0.5, 0.6, 10), { lo: -1, hi: 1, count: 4 }, false, out, 0);
-    [1, 1, 0, 3].forEach((count, k) => expect(out[k]! * 5).toBeCloseTo(count, 5));
+  it('bins weights on a signed-log axis, clamping beyond ±50 into the edge bins', () => {
+    const out = new Float32Array(WEIGHT_BINS.count);
+    histogramInto(f32(-1000, -60, 0, 2, 2.1, 1000), WEIGHT_BINS, out, 0);
+    const binOf = (w: number) =>
+      Math.floor(
+        ((toBinAxis(w, WEIGHT_BINS.scale) - WEIGHT_BINS.lo) / (WEIGHT_BINS.hi - WEIGHT_BINS.lo)) *
+          WEIGHT_BINS.count,
+      );
+    expect(out[0]! * 6).toBeCloseTo(2, 5); // −1000 and −60
+    expect(out[WEIGHT_BINS.count - 1]! * 6).toBeCloseTo(1, 5);
+    expect(out[WEIGHT_BINS.count / 2]! * 6).toBeCloseTo(1, 5); // 0 sits on the centre edge
+    expect(binOf(2)).toBe(binOf(2.1)); // ≈ ×1.5 per bin at this size
+    expect(out[binOf(2)]! * 6).toBeCloseTo(2, 5);
+  });
+
+  it('the asinh axis is linear near 0, logarithmic far out, and invertible', () => {
+    const s = WEIGHT_BINS.scale;
+    expect(toBinAxis(0.001, s)).toBeCloseTo(0.001 / 0.05, 3);
+    expect(toBinAxis(40, s) - toBinAxis(4, s)).toBeCloseTo(Math.LN10, 2);
+    for (const w of [-37, -0.2, 0, 0.003, 1.5])
+      expect(fromBinAxis(toBinAxis(w, s), s)).toBeCloseTo(w, 6);
   });
 
   it('bins log10|v| for gradients, with zeros in the bottom bin', () => {
     const out = new Float32Array(GRAD_BINS.count + 2);
-    histogramInto(f32(0, 1e-3, -1e-3, 1), GRAD_BINS, true, out, 1);
+    histogramInto(f32(0, 1e-3, -1e-3, 1), GRAD_BINS, out, 1);
     expect(out[0]).toBe(0); // untouched before the offset
     expect(out[1]).toBeCloseTo(0.25); // the zero
     const binOf = (log: number) =>

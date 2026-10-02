@@ -1,5 +1,5 @@
 import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
-import type { BinSpec } from '../worker';
+import { type BinSpec, fromBinAxis, toBinAxis } from '../worker';
 import { cssVar, formatPow10, prepareCanvas } from './canvas';
 import { LUT_SIZE, sequentialLut } from './colour';
 import { useElementWidth, usePrefersDark } from './hooks';
@@ -13,8 +13,6 @@ interface HistogramTimelineProps {
   hist: Float32Array;
   epochs: Float32Array;
   bins: BinSpec;
-  /** Bins are over log10|v| rather than v. */
-  log: boolean;
   label: string;
 }
 
@@ -23,7 +21,7 @@ interface HistogramTimelineProps {
  * of the layer's weights in that bin. The square root of the fraction is shown so
  * thin tails stay visible.
  */
-export function HistogramTimeline({ hist, epochs, bins, log, label }: HistogramTimelineProps) {
+export function HistogramTimeline({ hist, epochs, bins, label }: HistogramTimelineProps) {
   const wrap = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLCanvasElement>(null);
   const width = useElementWidth(wrap);
@@ -67,14 +65,32 @@ export function HistogramTimeline({ hist, epochs, bins, log, label }: HistogramT
     ctx.font = '10px system-ui, sans-serif';
     ctx.fillStyle = cssVar(canvas, '--muted');
     ctx.textAlign = 'right';
-    const yOf = (v: number) => PAD.top + ((bins.hi - v) / (bins.hi - bins.lo)) * plotH;
-    const ticks = log
-      ? [bins.hi - 1, Math.round((bins.lo + bins.hi) / 2), bins.lo]
-      : [bins.hi, 0, bins.lo];
-    ticks.forEach((v, i) => {
+    // y of a position on the bin axis.
+    const yOf = (t: number) => PAD.top + ((bins.hi - t) / (bins.hi - bins.lo)) * plotH;
+    const ticks: [number, string][] =
+      bins.scale.kind === 'asinh'
+        ? [10, 0, -10].map((w) => [toBinAxis(w, bins.scale), String(w)])
+        : [bins.hi - 1, Math.round((bins.lo + bins.hi) / 2), bins.lo].map((e) => [
+            e,
+            formatPow10(e),
+          ]);
+    ticks.forEach(([t, text], i) => {
       ctx.textBaseline = i === 0 ? 'top' : i === ticks.length - 1 ? 'bottom' : 'middle';
-      ctx.fillText(log ? formatPow10(v) : String(v), PAD.left - 4, yOf(v));
+      ctx.fillText(text, PAD.left - 4, Math.min(Math.max(yOf(t), PAD.top), PAD.top + plotH));
     });
+    if (bins.scale.kind === 'asinh') {
+      // Unlabelled guides at ±1: on the signed-log axis most weights sit between them.
+      ctx.strokeStyle = cssVar(canvas, '--muted');
+      ctx.setLineDash([2, 3]);
+      for (const w of [1, -1]) {
+        const y = Math.round(yOf(toBinAxis(w, bins.scale))) + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(PAD.left, y);
+        ctx.lineTo(PAD.left + plotW, y);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
 
     if (hover) {
       ctx.strokeStyle = cssVar(canvas, '--fg');
@@ -83,7 +99,7 @@ export function HistogramTimeline({ hist, epochs, bins, log, label }: HistogramT
       const ch = plotH / B;
       ctx.strokeRect(PAD.left + hover.t * cw, PAD.top + (B - 1 - hover.b) * ch, cw, ch);
     }
-  }, [hist, T, B, bins, log, width, plotW, plotH, lut, hover]);
+  }, [hist, T, B, bins, width, plotW, plotH, lut, hover]);
 
   const onMove = (e: MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -94,11 +110,16 @@ export function HistogramTimeline({ hist, epochs, bins, log, label }: HistogramT
   };
 
   const binRange = (b: number) => {
-    const w = (bins.hi - bins.lo) / B;
-    const [a, z] = [bins.lo + b * w, bins.lo + (b + 1) * w];
-    if (!log)
-      return `${a.toFixed(2)} … ${z.toFixed(2)}${b === 0 || b === B - 1 ? ' (and beyond)' : ''}`;
-    return `|v| ${(10 ** a).toExponential(1)} … ${(10 ** z).toExponential(1)}${b === 0 ? ' (and below)' : ''}`;
+    const step = (bins.hi - bins.lo) / B;
+    const [a, z] = [b, b + 1].map((k) => fromBinAxis(bins.lo + k * step, bins.scale)) as [
+      number,
+      number,
+    ];
+    if (bins.scale.kind === 'asinh') {
+      const edge = b === 0 ? ' (and below)' : b === B - 1 ? ' (and above)' : '';
+      return `${a.toPrecision(2)} … ${z.toPrecision(2)}${edge}`;
+    }
+    return `|v| ${a.toExponential(1)} … ${z.toExponential(1)}${b === 0 ? ' (and below)' : ''}`;
   };
 
   return (
