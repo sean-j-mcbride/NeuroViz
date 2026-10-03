@@ -154,7 +154,8 @@ function overlaps(x: Float32Array, y: Float32Array): boolean {
   );
 }
 
-function allFinite(d: Float32Array): boolean {
+/** Whether every value is finite (the zero-skipping kernels require it of B). */
+export function allFinite(d: Float32Array): boolean {
   for (let i = 0; i < d.length; i++) if (!Number.isFinite(d[i]!)) return false;
   return true;
 }
