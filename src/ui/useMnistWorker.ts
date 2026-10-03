@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { toMnistSessionConfig, useMnistStore } from '../state/mnistStore';
+import { mnistNetworkError, toMnistSessionConfig, useMnistStore } from '../state/mnistStore';
 import { useAppStore } from '../state/store';
 import type { FromWorker, MnistCheckpoint } from '../worker';
 import { loadMnist } from './mnistLoader';
@@ -75,6 +75,8 @@ export function useMnistWorker(): {
   useEffect(() => {
     if (!subset) return;
     const { config, resume } = useMnistStore.getState();
+    // The builder shows why; the last valid session stays until the network is fixed.
+    if (mnistNetworkError(config.network)) return;
     client.init(toMnistSessionConfig(config, subset, resume));
   }, [client, subset, network, seed, resetCount]);
 

@@ -16,7 +16,7 @@ const data = loadMnistSubset();
 /** A small network so the tests stay quick. */
 const SMALL: MnistSessionConfig = {
   task: 'mnist',
-  network: { hidden: [{ units: 16, activation: 'relu' }] },
+  network: { conv: [], hidden: [{ units: 16, activation: 'relu' }] },
   seed: 1,
   data,
   lr: 0.001,
@@ -58,7 +58,7 @@ describe('MnistSession', () => {
     const snap = s.snapshot();
     expect(snap.task).toBe('mnist');
     expect(snap.firstLayer).toMatchObject({ inFeatures: 784, outFeatures: 16 });
-    expect(snap.firstLayer.W).toHaveLength(784 * 16);
+    expect(snap.firstLayer!.W).toHaveLength(784 * 16);
     expect(snap.losses.count).toBe(1);
     expect(snap.trainSize).toBe(10_000);
     expect(snap.testSize).toBe(2_000);
@@ -68,9 +68,9 @@ describe('MnistSession', () => {
   });
 
   it('with no hidden layer, the first layer is the output (10 class templates)', () => {
-    const s = new MnistSession({ ...SMALL, network: { hidden: [] } });
+    const s = new MnistSession({ ...SMALL, network: { conv: [], hidden: [] } });
     const snap = s.snapshot({ drawn: new Float32Array(784) });
-    expect(snap.firstLayer.outFeatures).toBe(10);
+    expect(snap.firstLayer!.outFeatures).toBe(10);
     expect(snap.prediction?.hidden).toBeUndefined();
   });
 
@@ -182,7 +182,7 @@ describe('MNIST done-when: ~95 % test accuracy, quickly', () => {
   it('784-128-10 ReLU, Adam: ≥ 95 % within 6 epochs, still ≥ 95 % at 10', () => {
     const s = new MnistSession({
       ...SMALL,
-      network: { hidden: [{ units: 128, activation: 'relu' }] },
+      network: { conv: [], hidden: [{ units: 128, activation: 'relu' }] },
     });
     let first95 = Infinity;
     let records = s.snapshot().losses.count;
@@ -288,5 +288,144 @@ describe('TrainingController with an MNIST session', () => {
     if (reply.type !== 'snapshot' || !isMnistSnapshot(reply.snapshot))
       throw new Error('no snapshot');
     expect(reply.snapshot.step).toBe(5);
+  });
+});
+
+describe('MnistSession with a CNN', () => {
+  /** conv 4 × 5×5 ReLU → pool 2×2 → (4 × 12 × 12 = 576) → dense 16 ReLU → 10: small, so quick. */
+  const CNN: MnistSessionConfig = {
+    ...SMALL,
+    network: {
+      conv: [
+        { kind: 'conv', filters: 4, kernel: 5, stride: 1, padding: 'valid', activation: 'relu' },
+        { kind: 'pool', size: 2 },
+      ],
+      hidden: [{ units: 16, activation: 'relu' }],
+    },
+  };
+
+  it('builds the image model; snapshots carry its filters, not first-layer tiles', () => {
+    const snap = new MnistSession(CNN).snapshot();
+    expect(snap.firstLayer).toBeUndefined();
+    expect(snap.filters).toHaveLength(1);
+    expect(snap.filters![0]).toMatchObject({
+      row: 0,
+      inChannels: 1,
+      outChannels: 4,
+      kernel: 5,
+      stride: 1,
+      padding: 'valid',
+    });
+    expect(snap.filters![0]!.W).toHaveLength(25 * 4);
+    expect(snap.filters![0]!.b).toHaveLength(4);
+    expect(snap.testAccuracy).toBeLessThan(0.3);
+  });
+
+  it('learns', () => {
+    const snap = advance(new MnistSession(CNN), 160).snapshot();
+    expect(snap.testAccuracy).toBeGreaterThan(0.85);
+  });
+
+  it('is deterministic for a seed, and seeds differ', () => {
+    const a = advance(new MnistSession(CNN), 20);
+    const b = advance(new MnistSession(CNN), 20);
+    const c = advance(new MnistSession({ ...CNN, seed: 2 }), 20);
+    expect(sameParams(a, b)).toBe(true);
+    expect(sameParams(a, c)).toBe(false);
+  });
+
+  it('a drawn digit gets every row’s feature maps, and observing never changes the run', () => {
+    const cfg = { ...CNN, dropout: 0.3 };
+    const plain = advance(new MnistSession(cfg), 30);
+    const watched = new MnistSession(cfg);
+    for (let i = 0; i < 30; i++) {
+      watched.advance();
+      if (i % 7 === 0) watched.snapshot({ drawn: testImage(i) });
+    }
+    expect(sameParams(plain, watched)).toBe(true);
+
+    const { prediction } = watched.snapshot({ drawn: testImage(0) });
+    expect(prediction!.hidden).toBeUndefined();
+    const [conv, pool] = prediction!.maps!;
+    expect(conv!.row).toBe(0);
+    expect(conv!.shape).toEqual([4, 24, 24]);
+    expect(conv!.data.every((v) => v >= 0)).toBe(true); // after ReLU
+    expect(pool!.row).toBe(1);
+    expect(pool!.shape).toEqual([4, 12, 12]);
+    // Pool output (c, y, x) is the largest of conv's 2×2 window at (2y, 2x).
+    const at = (m: typeof conv, c: number, y: number, x: number) =>
+      m!.data[(c * m!.shape[1] + y) * m!.shape[2] + x]!;
+    for (const [c, y, x] of [
+      [0, 5, 6],
+      [3, 11, 0],
+      [2, 0, 11],
+    ] as const) {
+      const window = [0, 1].flatMap((dy) =>
+        [0, 1].map((dx) => at(conv, c, 2 * y + dy, 2 * x + dx)),
+      );
+      expect(at(pool, c, y, x)).toBe(Math.max(...window));
+    }
+    expect(prediction!.probs.reduce((a, b) => a + b)).toBeCloseTo(1, 5);
+  });
+
+  for (const optimiser of ['sgd', 'momentum', 'adam'] as const) {
+    it(`resuming mid-epoch is bitwise identical to never stopping (${optimiser}, dropout, L2)`, () => {
+      const cfg: MnistSessionConfig = {
+        ...CNN,
+        optimiser,
+        lr: optimiser === 'adam' ? 0.001 : 0.05,
+        dropout: 0.2,
+        l2: 0.001,
+        batchSize: 128,
+      };
+      // Epoch 1 is 79 batches (78 × 128, then 16): stop 11 batches into epoch 2,
+      // then resume across the start of epoch 3 (at batch 158).
+      const straight = advance(new MnistSession(cfg), 170);
+      const first = advance(new MnistSession(cfg), 90);
+      const saved: MnistCheckpoint = structuredClone(first.checkpoint());
+      const resumed = advance(new MnistSession({ ...cfg, resume: saved }), 80);
+      expect(sameParams(straight, resumed)).toBe(true);
+      expect(resumed.snapshot().evaluation).toEqual(straight.snapshot().evaluation);
+      // Crossing into epoch 3 takes about 4 epochs of training in all: a few seconds.
+    }, 30_000);
+  }
+
+  it('a network whose conv rows don’t fit the image is refused with the reason', () => {
+    const conv = {
+      kind: 'conv',
+      filters: 4,
+      kernel: 5,
+      stride: 1,
+      padding: 'valid',
+      activation: 'relu',
+    } as const;
+    const pool = { kind: 'pool', size: 2 } as const;
+    expect(
+      () =>
+        new MnistSession({ ...CNN, network: { conv: [conv, pool, conv, pool, conv], hidden: [] } }),
+    ).toThrow('Conv layer 5: a 5 × 5 kernel doesn’t fit a 4 × 4 input');
+  });
+
+  it('through the controller: snapshots with maps transfer every buffer and survive cloning', () => {
+    const sent: { message: FromWorker; transfer: ArrayBuffer[] }[] = [];
+    const controller = new TrainingController(
+      (message, transfer) => sent.push({ message, transfer }),
+      {
+        now: () => 0,
+        defer: () => {},
+      },
+    );
+    controller.handle({ type: 'init', sessionId: 1, config: CNN });
+    controller.handle({ type: 'step' });
+    controller.handle({ type: 'snapshot', requestId: 1, drawn: testImage(3) });
+    const { message, transfer } = sent.at(-1)!;
+    if (message.type !== 'snapshot' || !isMnistSnapshot(message.snapshot)) {
+      throw new Error('expected an MNIST snapshot');
+    }
+    expect(message.snapshot.prediction?.maps).toHaveLength(2);
+    expect(transfer).toEqual(mnistSnapshotBuffers(message.snapshot));
+    expect(transfer).toContain(message.snapshot.prediction!.maps![0]!.data.buffer);
+    expect(transfer).toContain(message.snapshot.filters![0]!.W.buffer);
+    expect(structuredClone(message)).toEqual(message);
   });
 });

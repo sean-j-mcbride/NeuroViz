@@ -1,6 +1,6 @@
 import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { MNIST_PIXELS, MNIST_SIDE } from '../data';
-import type { MnistSnapshot } from '../worker';
+import type { FirstLayerWeights } from '../worker';
 import { formatPrecise, lutIndex } from './colour';
 import { topUnits, unitStats } from './mnistResults';
 import { useHeatmapLut } from './hooks';
@@ -13,7 +13,7 @@ const GAP = 2;
 export type WeightScale = 'tile' | 'shared';
 
 interface WeightImagesProps {
-  layer: MnistSnapshot['firstLayer'];
+  layer: FirstLayerWeights;
   scale: WeightScale;
   /** First-hidden-layer activations for a drawn digit, to outline the most active units. */
   hidden?: Float32Array;
@@ -136,7 +136,7 @@ export function WeightTile({
   unit,
   size = 168,
 }: {
-  layer: MnistSnapshot['firstLayer'];
+  layer: FirstLayerWeights;
   unit: number;
   size?: number;
 }) {

@@ -1,7 +1,13 @@
 import { create } from 'zustand';
 import type { MnistSubset } from '../data';
-import type { Hyperparams, MnistCheckpoint, MnistSnapshot, NetworkSpec, Speed } from '../worker';
-import { MNIST_DEFAULT_CONFIG, type MnistConfig } from './mnistConfig';
+import type {
+  Hyperparams,
+  MnistCheckpoint,
+  MnistNetworkSpec,
+  MnistSnapshot,
+  Speed,
+} from '../worker';
+import { MNIST_DEFAULT_CONFIG, type MnistConfig, mnistNetworkError } from './mnistConfig';
 import type { MnistModelFile } from './mnistModelFile';
 
 export * from './mnistConfig';
@@ -34,7 +40,7 @@ export interface MnistState {
   /** null = the most confidently wrong test images overall. */
   galleryFilter: GalleryFilter | null;
 
-  setNetwork(network: NetworkSpec): void;
+  setNetwork(network: MnistNetworkSpec): void;
   setTraining(patch: Partial<Hyperparams>): void;
   setSeed(seed: number): void;
   setRunning(running: boolean): void;
@@ -60,7 +66,13 @@ export const useMnistStore = create<MnistState>()((set, get) => ({
   drawn: null,
   galleryFilter: null,
 
-  setNetwork: (network) => set(({ config }) => ({ config: { ...config, network }, resume: null })),
+  // A network that doesn't fit the image is kept (so the builder can show why) but can't run.
+  setNetwork: (network) =>
+    set(({ config, running }) => ({
+      config: { ...config, network },
+      resume: null,
+      running: running && !mnistNetworkError(network),
+    })),
   setTraining: (patch) =>
     set(({ config }) => ({ config: { ...config, training: { ...config.training, ...patch } } })),
   setSeed: (seed) => set(({ config }) => ({ config: { ...config, seed }, resume: null })),

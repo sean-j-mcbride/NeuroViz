@@ -33,7 +33,11 @@ import {
  */
 
 export { MNIST_MODEL_FILE_FORMAT };
-export const MNIST_MODEL_FILE_VERSION = 1;
+/**
+ * 2 (Phase 6): the network gained `conv` rows. Version 1 files (MLPs, no
+ * `conv`) still load; settings without `conv` are read as an MLP.
+ */
+export const MNIST_MODEL_FILE_VERSION = 2;
 
 export interface MnistModelFile {
   config: MnistConfig;
@@ -168,7 +172,7 @@ export function parseMnistModelFile(text: string, data: MnistSubset): MnistModel
         `this version reads format ${MNIST_MODEL_FILE_VERSION}.`,
     );
   }
-  if (d.version !== MNIST_MODEL_FILE_VERSION)
+  if (d.version !== 1 && d.version !== MNIST_MODEL_FILE_VERSION)
     fail('The file’s format version is missing or invalid.');
 
   const ds = record(d.dataset, 'dataset');

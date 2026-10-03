@@ -1,5 +1,5 @@
 import { MNIST_CLASSES, MNIST_PIXELS } from '../data';
-import type { MnistSnapshot } from '../worker';
+import type { FirstLayerWeights } from '../worker';
 
 /** `[10 × 10]` counts, row = true label, column = predicted class. */
 export function confusionCounts(labels: Uint8Array, predicted: Uint8Array): Uint32Array {
@@ -52,7 +52,7 @@ export interface UnitStats {
 }
 
 /** Each unit's weight range, RMS and bias. W is `[784, units]`. */
-export function unitStats({ W, b, outFeatures: units }: MnistSnapshot['firstLayer']): UnitStats[] {
+export function unitStats({ W, b, outFeatures: units }: FirstLayerWeights): UnitStats[] {
   return Array.from({ length: units }, (_, j) => {
     let min = Infinity;
     let max = -Infinity;

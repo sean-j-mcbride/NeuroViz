@@ -26,6 +26,8 @@ export interface TransportControlsProps {
   onSpeed(speed: Speed): void;
   seed: number;
   onSeed(seed: number): void;
+  /** Why training can't start now (disables Play and Step), or null. */
+  blocked?: string | null;
 }
 
 /** Play / pause / step / reset, learning rate, batch size, speed and weight seed. */
@@ -42,15 +44,16 @@ export function TransportControls(p: TransportControlsProps) {
           type="button"
           className="primary"
           onClick={() => p.onRunning(!p.running)}
-          title={p.running ? 'Pause' : 'Train'}
+          disabled={!p.running && !!p.blocked}
+          title={p.running ? 'Pause' : (p.blocked ?? 'Train')}
         >
           {p.running ? '❚❚ Pause' : '▶ Play'}
         </button>
         <button
           type="button"
           onClick={p.onStep}
-          disabled={p.running}
-          title={`Train for ${p.stepUnit}`}
+          disabled={p.running || !!p.blocked}
+          title={p.blocked ?? `Train for ${p.stepUnit}`}
         >
           ⏭ Step
         </button>

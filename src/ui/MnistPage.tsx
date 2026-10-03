@@ -1,12 +1,14 @@
 import { useMemo, useRef, useState } from 'react';
 import { MNIST_PIXELS, type MnistSet } from '../data';
 import { useMnistStore } from '../state/mnistStore';
-import { MNIST_BATCH_SIZES } from '../state/mnistConfig';
+import { MNIST_BATCH_SIZES, mnistNetworkError } from '../state/mnistConfig';
 import {
   ConfusionMatrix,
   DigitImage,
   DigitPad,
   type DigitPadHandle,
+  FeatureMaps,
+  FilterViewer,
   LossCurve,
   PredictionBars,
   WeightImages,
@@ -19,7 +21,7 @@ import {
   topUnits,
   unitStats,
 } from '../viz';
-import { type MnistSnapshot, type Speed, TRAIN_EVAL_SIZE } from '../worker';
+import { type FirstLayerWeights, type MnistSnapshot, type Speed, TRAIN_EVAL_SIZE } from '../worker';
 import { HyperparamControls } from './OptimiserControls';
 import { MnistArchitecture } from './MnistArchitecture';
 import { MnistProjectBar } from './MnistProjectBar';
@@ -39,7 +41,7 @@ function MnistControls({
 }) {
   const running = useMnistStore((s) => s.running);
   const speed = useMnistStore((s) => s.speed);
-  const { training, seed } = useMnistStore((s) => s.config);
+  const { training, seed, network } = useMnistStore((s) => s.config);
   const epoch = useMnistStore((s) => s.snapshot?.epoch ?? 0);
   const { setRunning, setSpeed, setTraining, setSeed, reset } = useMnistStore.getState();
   return (
@@ -67,6 +69,7 @@ function MnistControls({
         onSpeed={setSpeed}
         seed={seed}
         onSeed={setSeed}
+        blocked={mnistNetworkError(network) && 'Fix the network first (see Network)'}
       />
       <HyperparamControls
         optimiser={training.optimiser}
@@ -79,14 +82,12 @@ function MnistControls({
   );
 }
 
-function WeightsPanel({ snapshot }: { snapshot: MnistSnapshot }) {
+function WeightsPanel({ layer, hidden }: { layer: FirstLayerWeights; hidden?: Float32Array }) {
   const [scale, setScale] = useState<'tile' | 'shared'>('tile');
   const [asTable, setAsTable] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
-  const layer = snapshot.firstLayer;
   // No hidden layer: the first layer is the output (hidden layers are never 10 wide).
   const classes = layer.outFeatures === 10;
-  const hidden = snapshot.prediction?.hidden;
   const unitName = (j: number) => (classes ? `Digit ${j}` : `Unit ${j + 1}`);
   const stats = useMemo(() => (asTable ? unitStats(layer) : []), [asTable, layer]);
   const active = useMemo(() => new Set(hidden ? topUnits(hidden, 8) : []), [hidden]);
@@ -203,9 +204,11 @@ function WeightsPanel({ snapshot }: { snapshot: MnistSnapshot }) {
 function TryPanel({
   padRef,
   probs,
+  onTestImage,
 }: {
   padRef: React.RefObject<DigitPadHandle | null>;
   probs: Float32Array | null;
+  onTestImage: (() => void) | null;
 }) {
   const drawn = useMnistStore((s) => s.drawn);
   const setDrawn = useMnistStore.getState().setDrawn;
@@ -220,6 +223,11 @@ function TryPanel({
         <button type="button" onClick={() => padRef.current?.clear()} disabled={!drawn}>
           Clear
         </button>
+        {onTestImage && (
+          <button type="button" onClick={onTestImage}>
+            Show a test image
+          </button>
+        )}
         {drawn && (
           <span className="pad-preview">
             <DigitImage pixels={drawn} size={42} label="What the network sees" />
@@ -384,6 +392,7 @@ export function MnistPage() {
   const worker = useMnistWorker();
   const data = useMnistStore((s) => s.data);
   const snapshot = useMnistStore((s) => s.snapshot);
+  const drawn = useMnistStore((s) => s.drawn);
   const padRef = useRef<DigitPadHandle | null>(null);
   const subset = data.status === 'ready' ? data.subset : null;
 
@@ -411,9 +420,47 @@ export function MnistPage() {
       )}
       <main className="mnist-grid">
         <MnistArchitecture />
-        {snapshot ? <WeightsPanel snapshot={snapshot} /> : <section className="panel" />}
-        <TryPanel padRef={padRef} probs={snapshot?.prediction?.probs ?? null} />
+        {snapshot?.filters ? (
+          <section className="panel weights-panel">
+            <h2>What the filters look for</h2>
+            <FilterViewer filters={snapshot.filters} rows={snapshot.network.conv} />
+            <p className="hint">
+              Each tile is one kernel: the weights a filter slides across its input. They start as
+              random noise; training turns the first layer’s into small stroke and edge detectors.
+              Click a tile to see its numbers.
+            </p>
+          </section>
+        ) : snapshot?.firstLayer ? (
+          <WeightsPanel layer={snapshot.firstLayer} hidden={snapshot.prediction?.hidden} />
+        ) : (
+          <section className="panel" />
+        )}
+        <TryPanel
+          padRef={padRef}
+          probs={snapshot?.prediction?.probs ?? null}
+          onTestImage={
+            subset ? () => tryImage(Math.floor(Math.random() * subset.test.labels.length)) : null
+          }
+        />
       </main>
+      {snapshot?.filters && (
+        <section className="panel feature-maps-panel">
+          {drawn && snapshot.prediction?.maps ? (
+            <FeatureMaps
+              rows={snapshot.network.conv}
+              maps={snapshot.prediction.maps}
+              input={drawn}
+            />
+          ) : (
+            <>
+              <h2>Feature maps</h2>
+              <p className="hint">
+                Draw a digit, or press “Show a test image”, to see what every layer makes of it.
+              </p>
+            </>
+          )}
+        </section>
+      )}
       {snapshot && subset && (
         <div className="mnist-results">
           <TrainingPanel snapshot={snapshot} />

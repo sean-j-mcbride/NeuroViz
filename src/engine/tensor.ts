@@ -191,7 +191,7 @@ export function matmul(a: Tensor, b: Tensor, opts: MatmulOptions = {}, out?: Ten
   const A = a.data;
   const B = b.data;
   const C = res.data;
-  if (k * n < SMALL) matmulPlain(A, B, C, m, k, n, transA, transB);
+  if (k * n < SMALL && m < SMALL_ROWS) matmulPlain(A, B, C, m, k, n, transA, transB);
   else if (!transA && !transB) matmulNN(A, B, C, m, k, n, allFinite(B));
   else if (transA && !transB) matmulTN(A, B, C, m, k, n, allFinite(B));
   else if (!transA && transB) matmulNT(A, B, C, m, k, n);
@@ -202,9 +202,16 @@ export function matmul(a: Tensor, b: Tensor, opts: MatmulOptions = {}, out?: Ten
 /**
  * Below this many elements in op(b), the reordered kernels' set-up (the
  * finiteness scan, clearing and copying the accumulators) costs more than it
- * saves, so the plain loop is used (the 2D playground's 8-unit layers).
+ * saves, so the plain loop is used (the 2D playground's 8-unit layers)...
  */
 const SMALL = 256;
+/**
+ * ...unless the product is this tall: then the set-up is spread over so many
+ * rows that it is negligible, and skipping zeros pays (a conv layer's im2col
+ * over a batch: 8 filters of 5×5 is k·n = 200, over ~37,000 rows). The
+ * playground never gets here (its tallest product is the 2,500-point grid).
+ */
+const SMALL_ROWS = 4096;
 
 /** The plain triple loop over strided indices; handles every transpose combination. */
 function matmulPlain(

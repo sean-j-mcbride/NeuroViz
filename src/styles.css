@@ -1074,6 +1074,64 @@ button.close {
   min-width: 0;
 }
 
+.layer-kind {
+  flex: none;
+  min-width: 40px;
+  align-self: center;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* A conv or pool row: its controls, then a second line with stride/padding and the output shape. */
+.layer-block {
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.layer-block .layer-row > .layer-kind:only-child,
+.layer-block .layer-row > .layer-kind:first-child:nth-last-child(2) {
+  flex: 1;
+}
+
+.layer-block.invalid {
+  border-color: var(--error);
+}
+
+.layer-detail {
+  align-items: center;
+  padding-left: 44px;
+}
+
+.layer-detail select {
+  flex: 0 1 auto;
+}
+
+.layer-shape {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.layer-error {
+  color: var(--error);
+  font-size: 12px;
+}
+
+.layer-add {
+  display: flex;
+  gap: 6px;
+  margin: -4px 0 10px;
+}
+
+.mnist-architecture .panel-toolbar .segmented button {
+  white-space: nowrap;
+}
+
 .weights-options {
   display: flex;
   flex-wrap: wrap;
@@ -1341,4 +1399,98 @@ button.close {
   color: var(--muted);
   font-size: 12px;
   margin-top: 16px;
+}
+
+/* CNN filters (Weights panel) */
+.filter-grid {
+  margin-bottom: 8px;
+}
+
+.filter-axes {
+  margin: 0 0 6px;
+}
+
+.kernel-table {
+  border-collapse: collapse;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.kernel-table td {
+  width: 40px;
+  height: 28px;
+  text-align: center;
+  border: 1px solid var(--surface);
+  color: var(--fg);
+}
+
+/* Strongly coloured cells: white text on the saturated blue/orange ends. */
+.kernel-table td.strong {
+  color: #ffffff;
+}
+
+/* Feature maps */
+.feature-maps-panel {
+  margin-top: 16px;
+}
+
+.feature-maps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  align-items: flex-start;
+}
+
+.map-layer {
+  margin: 0;
+  max-width: 100%;
+}
+
+.map-layer figcaption {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.map-canvas {
+  position: relative;
+  max-width: 100%;
+}
+
+.map-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+}
+
+.map-canvas canvas.pickable {
+  cursor: crosshair;
+}
+
+.map-field,
+.map-picked {
+  position: absolute;
+  pointer-events: none;
+  outline: 2px solid var(--fg);
+  outline-offset: -1px;
+}
+
+.map-picked {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.map-readout {
+  min-height: 2.8em;
+}
+
+button.link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
 }

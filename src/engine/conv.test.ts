@@ -10,7 +10,7 @@ import { layerFromConfig } from './build';
 import { SoftmaxCrossEntropyLoss } from './losses';
 import { Rng } from './random';
 import { Sequential } from './sequential';
-import { inferShapes, outputShape } from './shapes';
+import { inferShapes, layerCost, outputShape } from './shapes';
 import { Tensor, reshape } from './tensor';
 
 /** Fills every parameter (including biases) with fresh noise so every path is exercised. */
@@ -346,5 +346,33 @@ describe('shape inference', () => {
     ],
   ] as [LayerConfig, number[], string][])('%o on %o: %s', (layer, input, message) => {
     expect(outputShape(layer, input)).toEqual({ error: message });
+  });
+});
+
+describe('layer cost', () => {
+  it('counts parameters and forward multiply-adds per example', () => {
+    const conv: LayerConfig = {
+      kind: 'conv2d',
+      inChannels: 8,
+      outChannels: 16,
+      kernel: 5,
+      stride: 1,
+      padding: 'valid',
+      init: 'he',
+    };
+    expect(layerCost(conv, [16, 8, 8])).toEqual({
+      params: 200 * 16 + 16,
+      multiplyAdds: 64 * 200 * 16,
+    });
+    expect(
+      layerCost({ kind: 'dense', inFeatures: 784, outFeatures: 128, init: 'he' }, [128]),
+    ).toEqual({
+      params: 784 * 128 + 128,
+      multiplyAdds: 784 * 128,
+    });
+    expect(layerCost({ kind: 'maxpool2d', size: 2, stride: 2 }, [8, 12, 12])).toEqual({
+      params: 0,
+      multiplyAdds: 0,
+    });
   });
 });

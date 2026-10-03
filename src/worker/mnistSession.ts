@@ -1,4 +1,5 @@
 import {
+  Conv2D,
   Dense,
   Dropout,
   Rng,
@@ -11,6 +12,7 @@ import {
   importParams,
   layerFromConfig,
   makeOptimiser,
+  reshape,
 } from '../engine';
 import {
   MNIST_CLASSES,
@@ -25,18 +27,27 @@ import {
 } from '../data';
 import { LossHistory } from './lossHistory';
 import type {
+  ConvFilters,
+  FirstLayerWeights,
+  FeatureMap,
   MnistCheckpoint,
   MnistEvaluation,
   MnistPrediction,
   MnistSessionData,
   MnistSnapshot,
 } from './mnistSnapshot';
-import { type NetworkSpec, networkToLayerConfig } from './network';
+import {
+  MNIST_IMAGE_SHAPE,
+  type MnistNetworkSpec,
+  convRowEnds,
+  copyMnistNetwork,
+  mnistNetworkToLayerConfig,
+} from './network';
 import type { Hyperparams } from './session';
 
 export interface MnistSessionConfig extends Hyperparams {
   task: 'mnist';
-  network: NetworkSpec;
+  network: MnistNetworkSpec;
   /** Seeds weight initialisation, per-epoch shuffling and dropout masks. */
   seed: number;
   data: MnistSubset;
@@ -54,8 +65,9 @@ const EVAL_CHUNK = 500;
 const TRAIN_EVAL_SEED = 0;
 
 /**
- * One MNIST training run: an MLP with 784 inputs and 10 logits, trained with
- * softmax cross-entropy. DOM-free, so it runs unchanged in a Worker.
+ * One MNIST training run: an MLP (784 inputs) or a CNN (a 1 × 28 × 28 image)
+ * with 10 logits, trained with softmax cross-entropy. DOM-free, so it runs
+ * unchanged in a Worker.
  *
  * The unit of work is one mini-batch (an epoch of 10,000 images is far
  * longer than the worker's time slice). Only `advance` changes the model or
@@ -66,10 +78,18 @@ export class MnistSession {
   readonly test: MnistSet;
   private readonly model: Sequential;
   private readonly dense: Dense[];
+  private readonly convs: Conv2D[];
   private readonly dropouts: Dropout[];
   private readonly trainer: Trainer;
-  /** Index into model.layers of the layer whose output is the first hidden layer's value. */
+  /** Whether the model takes images (`[N, 1, 28, 28]`) rather than rows of 784 pixels. */
+  private readonly cnn: boolean;
+  /** MLPs: index into model.layers of the layer whose output is the first hidden layer's value. */
   private readonly firstHiddenEnd: number | null;
+  /** CNNs: index into model.layers of each conv row's last layer (its feature map). */
+  private readonly mapEnds: number[];
+  /** CNNs: the `conv` row of each Conv2D layer. */
+  private readonly convRows: number[];
+  private readonly network: MnistNetworkSpec;
   private readonly shuffleRng: Rng;
   private readonly initRng: Rng;
   private readonly order: Uint32Array;
@@ -92,21 +112,24 @@ export class MnistSession {
     this.test = data.test;
     const rng = new Rng(seed);
     this.initRng = rng;
-    const model = layerFromConfig(
-      networkToLayerConfig(network, config.dropout, MNIST_PIXELS, MNIST_CLASSES),
-      rng,
-    );
+    const model = layerFromConfig(mnistNetworkToLayerConfig(network, config.dropout), rng);
     if (!(model instanceof Sequential)) throw new Error('MnistSession: expected a Sequential');
     this.model = model;
+    this.network = copyMnistNetwork(network);
+    this.cnn = network.conv.length > 0;
     this.dense = model.layers.filter((l): l is Dense => l instanceof Dense);
-    this.dense[0]!.inputGrad = false; // nothing reads ∂L/∂pixels
+    this.convs = model.layers.filter((l): l is Conv2D => l instanceof Conv2D);
+    const first = model.layers.find((l) => l instanceof Dense || l instanceof Conv2D);
+    if (first instanceof Dense || first instanceof Conv2D) first.inputGrad = false; // nothing reads ∂L/∂pixels
     this.dropouts = model.layers.filter((l): l is Dropout => l instanceof Dropout);
     let end: number | null = null;
-    if (network.hidden.length > 0) {
+    if (!this.cnn && network.hidden.length > 0) {
       end = 0;
       while (!(model.layers[end + 1] instanceof Dense)) end++;
     }
     this.firstHiddenEnd = end;
+    this.mapEnds = convRowEnds(network.conv);
+    this.convRows = network.conv.flatMap((row, i) => (row.kind === 'conv' ? [i] : []));
 
     this.trainer = new Trainer({
       model,
@@ -161,12 +184,17 @@ export class MnistSession {
     const y = this.y.take([rows, MNIST_CLASSES]);
     gatherImages(this.train, this.order, this.cursor, x);
     oneHotInto(this.train.labels, this.order, this.cursor, y);
-    this.trainer.trainStep(x, y);
+    this.trainer.trainStep(this.input(x), y);
     this.step++;
     this.examples += rows;
     this.cursor += rows;
     if (this.cursor >= n) this.cursor = 0;
     if (this.examples >= this.losses.count * RECORD_EVERY) this.record();
+  }
+
+  /** Rows of 784 pixels as the model takes them: unchanged for an MLP, a view as images for a CNN. */
+  private input(x: Tensor): Tensor {
+    return this.cnn ? reshape(x, [x.rows, ...MNIST_IMAGE_SHAPE]) : x;
   }
 
   /** Loss and accuracy over `indices` of `set` in evaluation mode, optionally keeping predictions. */
@@ -181,7 +209,7 @@ export class MnistSession {
       const rows = Math.min(EVAL_CHUNK, indices.length - start);
       const x = gatherImages(set, indices, start, this.x.take([rows, MNIST_PIXELS]));
       const y = oneHotInto(set.labels, indices, start, this.y.take([rows, MNIST_CLASSES]));
-      const logits = this.model.forward(x, false);
+      const logits = this.model.forward(this.input(x), false);
       lossSum += this.evalLoss.forward(logits, y) * rows;
       const z = logits.data;
       for (let r = 0; r < rows; r++) {
@@ -218,11 +246,17 @@ export class MnistSession {
     if (pixels.length !== MNIST_PIXELS) {
       throw new Error(`predict: expected ${MNIST_PIXELS} pixels, got ${pixels.length}`);
     }
-    let h = new Tensor(pixels.slice(), [1, MNIST_PIXELS]);
+    let h = this.input(new Tensor(pixels.slice(), [1, MNIST_PIXELS]));
     let hidden: Float32Array | undefined;
+    const maps: FeatureMap[] = [];
     this.model.layers.forEach((layer, i) => {
       h = layer.forward(h, false);
       if (i === this.firstHiddenEnd) hidden = h.data.slice();
+      const row = this.mapEnds.indexOf(i);
+      if (row >= 0) {
+        const [, c, ht, w] = h.shape as [number, number, number, number];
+        maps.push({ row, shape: [c, ht, w], data: h.data.slice() });
+      }
     });
     const z = h.data;
     let max = -Infinity;
@@ -231,7 +265,7 @@ export class MnistSession {
     let sum = 0;
     for (let c = 0; c < MNIST_CLASSES; c++) sum += Math.exp(z[c]! - max);
     for (let c = 0; c < MNIST_CLASSES; c++) probs[c] = Math.exp(z[c]! - max) / sum;
-    return { probs, ...(hidden && { hidden }) };
+    return { probs, ...(hidden && { hidden }), ...(maps.length > 0 && { maps }) };
   }
 
   data(): MnistSessionData {
@@ -241,10 +275,10 @@ export class MnistSession {
   snapshot(opts: { drawn?: Float32Array } = {}): MnistSnapshot {
     const losses = this.losses.snapshot();
     const errors = this.errors.snapshot();
-    const first = this.dense[0]!;
     const prediction = opts.drawn && this.predict(opts.drawn);
     return {
       task: 'mnist',
+      network: copyMnistNetwork(this.network),
       examples: this.examples,
       epoch: this.epoch,
       step: this.step,
@@ -255,15 +289,33 @@ export class MnistSession {
       errors,
       trainAccuracy: 1 - errors.train.latest,
       testAccuracy: 1 - errors.test.latest,
-      firstLayer: {
-        inFeatures: first.inFeatures,
-        outFeatures: first.outFeatures,
-        W: first.W.value.data.slice(),
-        b: first.b.value.data.slice(),
-      },
+      ...(this.cnn ? { filters: this.filters() } : { firstLayer: this.firstLayer() }),
       evaluation: this.evaluationCopy(),
       ...(prediction && { prediction }),
     };
+  }
+
+  private firstLayer(): FirstLayerWeights {
+    const first = this.dense[0]!;
+    return {
+      inFeatures: first.inFeatures,
+      outFeatures: first.outFeatures,
+      W: first.W.value.data.slice(),
+      b: first.b.value.data.slice(),
+    };
+  }
+
+  private filters(): ConvFilters[] {
+    return this.convs.map((c, i) => ({
+      row: this.convRows[i]!,
+      inChannels: c.inChannels,
+      outChannels: c.outChannels,
+      kernel: c.kernel,
+      stride: c.stride,
+      padding: c.padding,
+      W: c.W.value.data.slice(),
+      b: c.b.value.data.slice(),
+    }));
   }
 
   private evaluationCopy(): MnistEvaluation {

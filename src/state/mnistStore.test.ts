@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { MnistCheckpoint } from '../worker';
-import { MNIST_DEFAULT_CONFIG, mnistParamCount, useMnistStore } from './mnistStore';
+import { MNIST_DEFAULT_CONFIG, mnistNetworkCost, useMnistStore } from './mnistStore';
 import { useAppStore } from './store';
 import { tabForHash, useTabStore } from './tab';
 
@@ -20,7 +20,7 @@ describe('MNIST store', () => {
     const s = useMnistStore.getState();
     expect(s.config).toEqual(MNIST_DEFAULT_CONFIG);
     expect([s.running, s.speed]).toEqual([false, 'max']);
-    expect(mnistParamCount(s.config.network)).toBe(784 * 128 + 128 + 128 * 10 + 10);
+    expect(mnistNetworkCost(s.config.network)?.params).toBe(784 * 128 + 128 + 128 * 10 + 10);
   });
 
   it('loading a model starts a fresh, paused run that resumes it; changing the network drops it', () => {
@@ -31,7 +31,7 @@ describe('MNIST store', () => {
     expect([s.running, s.resume, s.resetCount]).toEqual([false, checkpoint, before + 1]);
     s.setTraining({ lr: 0.003 }); // hyperparameters apply live
     expect(useMnistStore.getState().resume).toBe(checkpoint);
-    s.setNetwork({ hidden: [] });
+    s.setNetwork({ conv: [], hidden: [] });
     s = useMnistStore.getState();
     expect(s.resume).toBeNull();
     expect(s.config.training.lr).toBe(0.003);

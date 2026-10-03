@@ -13,7 +13,7 @@ const data = loadMnistSubset();
 
 const SMALL: MnistConfig = {
   ...MNIST_DEFAULT_CONFIG,
-  network: { hidden: [{ units: 16, activation: 'relu' }] },
+  network: { conv: [], hidden: [{ units: 16, activation: 'relu' }] },
   training: { ...MNIST_DEFAULT_CONFIG.training, dropout: 0.2, l2: 0.001 },
 };
 
@@ -31,7 +31,10 @@ function saved(config = SMALL, batches = 170): string {
 interface FileDoc {
   version: unknown;
   dataset: Record<string, unknown>;
-  config: { training: Record<string, unknown>; network: Record<string, unknown> };
+  config: {
+    training: Record<string, unknown>;
+    network: Record<string, unknown> & { conv?: unknown };
+  };
   checkpoint: { params: Record<string, unknown>; examples: unknown };
 }
 
@@ -108,6 +111,64 @@ describe('MNIST model files', () => {
       edited(text, (d) => (d.checkpoint.examples = 1e6)),
       /doesn’t match/,
     );
+  });
+
+  it('a CNN saves mid-epoch and resumes bitwise; its conv rows stay readable', () => {
+    const config: MnistConfig = {
+      ...SMALL,
+      network: {
+        conv: [
+          { kind: 'conv', filters: 4, kernel: 5, stride: 1, padding: 'valid', activation: 'relu' },
+          { kind: 'pool', size: 2 },
+        ],
+        hidden: [{ units: 16, activation: 'relu' }],
+      },
+    };
+    const straight = advance(new MnistSession(toMnistSessionConfig(config, data)), 200);
+    const text = saved(config, 170);
+    const doc = JSON.parse(text);
+    expect(doc.version).toBe(2);
+    expect(doc.config.network.conv).toEqual(config.network.conv);
+    const file = parseMnistModelFile(text, data);
+    expect(file.config).toEqual(config);
+    const resumed = advance(
+      new MnistSession(toMnistSessionConfig(file.config, data, file.checkpoint)),
+      30,
+    );
+    expect(resumed.checkpoint()).toEqual(straight.checkpoint());
+  }, 30_000);
+
+  it('version 1 files (Phase 5, no conv rows) still load, as MLPs', () => {
+    const v1 = edited(saved(SMALL, 20), (d) => {
+      d.version = 1;
+      delete d.config.network.conv;
+    });
+    expect(parseMnistModelFile(v1, data).config.network).toEqual(SMALL.network);
+  });
+
+  it('rejects conv rows the controls don’t offer, or that don’t fit the image', () => {
+    const conv = (filters: number) => ({
+      kind: 'conv',
+      filters,
+      kernel: 5,
+      stride: 1,
+      padding: 'valid',
+      activation: 'relu',
+    });
+    const pool = { kind: 'pool', size: 2 };
+    const text = saved();
+    expect(() =>
+      parseMnistModelFile(
+        edited(text, (d) => (d.config.network.conv = [conv(7)])),
+        data,
+      ),
+    ).toThrow(/conv layer .*"filters":7.* is not one the controls offer/);
+    expect(() =>
+      parseMnistModelFile(
+        edited(text, (d) => (d.config.network.conv = [conv(4), pool, conv(4), pool, conv(4)])),
+        data,
+      ),
+    ).toThrow('conv layer 5: a 5 × 5 kernel doesn’t fit a 4 × 4 input');
   });
 
   it('the playground loader sends MNIST files to the MNIST tab', () => {

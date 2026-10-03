@@ -1,7 +1,7 @@
 import { heNormal, xavierNormal } from '../init';
 import type { Rng } from '../random';
 import { paddingAmount, slidingOutput } from '../shapes';
-import { Tensor, TensorBuffer, add, matmul, sumAxis } from '../tensor';
+import { Tensor, TensorBuffer, add, matmul, sumAxis, transpose } from '../tensor';
 import type { InitKind, Layer, LayerConfig, Padding, Param } from './types';
 
 /** Default cap on the im2col buffer, in elements (16 MB of float32). */
@@ -24,10 +24,13 @@ export interface Conv2DOptions {
  * (channel c, row ky, column kx at row c·k² + ky·k + kx), one column per
  * filter. b is `[outC]`.
  *
- * Implemented as im2col + matmul: every output position's receptive patch
- * becomes one row of `col` `[images·H′·W′, inC·k²]`, so forward is col · W
- * and the weight gradient is colᵀ · dY. That reuses the exact, zero-skipping
- * `matmul` kernels (input pixels and ReLU outputs are mostly zero).
+ * Implemented as im2col + matmul on the exact `matmul` kernels. Every output
+ * position's receptive patch becomes one row of `col` `[images·H′·W′,
+ * inC·k²]`, so forward is col · W, the weight gradient colᵀ · dY and the
+ * input gradient dY · Wᵀ. Each is arranged so the kernel skips the operand
+ * that is mostly zeros: blank pixels and ReLU zeros in `col`, and the
+ * gradients max-pooling and ReLU block in dY. (Measured on MNIST: a
+ * quarter less time per batch than the transposed, dense arrangement.)
  *
  * `col` is k² times the size of the input, so the batch goes through in
  * chunks of whole images that keep it under `colBudget`. Outputs and input
@@ -55,6 +58,7 @@ export class Conv2D implements Layer {
   private readonly dyBuf = new TensorBuffer();
   private readonly dcolBuf = new TensorBuffer();
   private readonly dx = new TensorBuffer();
+  private readonly WT = new TensorBuffer();
   private dWChunk: Tensor | null = null;
   private dbChunk: Tensor | null = null;
 
@@ -98,9 +102,10 @@ export class Conv2D implements Layer {
   }
 
   /**
-   * Copies every patch of images [b0, b0 + m) into `col`, one row per output
-   * position (zeros where the patch hangs over the padded edge). With `add`,
-   * runs the other way (col2im): adds each row of `col` back into `x`.
+   * im2col: copies every patch of images [b0, b0 + m) into `col`
+   * `[m·H′·W′, inC·k²]`, one row per output position (zeros where the patch
+   * hangs over the padded edge). With `add`, runs the other way (col2im):
+   * adds each entry back where it came from in `x`.
    */
   private patches(
     x: Tensor,
@@ -123,11 +128,15 @@ export class Conv2D implements Layer {
             const plane = (b * c + ci) * h;
             for (let ky = 0; ky < k; ky++) {
               const iy = oy * s - pad + ky;
-              const inRow = iy >= 0 && iy < h;
+              if (iy < 0 || iy >= h) {
+                if (!add) cd.fill(0, o, o + k);
+                o += k;
+                continue;
+              }
               const ro = (plane + iy) * w;
               for (let kx = 0; kx < k; kx++, o++) {
                 const ix = ox * s - pad + kx;
-                const inside = inRow && ix >= 0 && ix < w;
+                const inside = ix >= 0 && ix < w;
                 if (add) {
                   if (inside) xd[ro + ix]! += cd[o]!;
                 } else cd[o] = inside ? xd[ro + ix]! : 0;
@@ -153,7 +162,7 @@ export class Conv2D implements Layer {
       const m = Math.min(chunk, n - b0);
       col = this.colBuf.take([m * area, taps]);
       this.patches(x, col, b0, m, oh, ow, false);
-      // y [m·H′·W′, outC] = col · W, then add the bias while permuting to NCHW.
+      // y [m·H′·W′, outC] = col · W, skipping zero pixels; then add the bias while permuting to NCHW.
       const yd = matmul(col, this.W.value, {}, this.yBuf.take([m * area, f])).data;
       for (let i = 0; i < m; i++) {
         for (let fi = 0; fi < f; fi++) {
@@ -180,6 +189,8 @@ export class Conv2D implements Layer {
     const g = gradOut.data;
     const dx = this.dx.take(x.shape);
     dx.data.fill(0);
+    // Wᵀ as its own array, so dcol = dY · Wᵀ runs on the kernel that skips dY's zeros.
+    const WT = this.inputGrad ? transpose(this.W.value, this.WT.take([f, taps])) : null;
     for (let b0 = 0; b0 < n; b0 += chunk) {
       const m = Math.min(chunk, n - b0);
       let col = this.col;
@@ -206,9 +217,9 @@ export class Conv2D implements Layer {
         add(this.W.grad, matmul(col, dy, { transA: true }, this.dWChunk), this.W.grad);
         add(this.b.grad, sumAxis(dy, 0, this.dbChunk), this.b.grad);
       }
-      if (this.inputGrad) {
-        // dcol = dY·Wᵀ, then add each patch back where it came from (col2im).
-        const dcol = matmul(dy, this.W.value, { transB: true }, this.dcolBuf.take(col.shape));
+      if (WT) {
+        // dcol = dY·Wᵀ (after max-pool and ReLU, dY is mostly zeros), then col2im.
+        const dcol = matmul(dy, WT, {}, this.dcolBuf.take(col.shape));
         this.patches(dx, dcol, b0, m, oh, ow, true);
       }
     }

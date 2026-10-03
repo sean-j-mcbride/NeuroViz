@@ -1,5 +1,6 @@
-import type { OptimiserState, ParamValues, RngState } from '../engine';
+import type { OptimiserState, Padding, ParamValues, RngState } from '../engine';
 import type { LossHistorySnapshot, LossHistoryState } from './lossHistory';
+import type { MnistNetworkSpec } from './network';
 
 /** What the network makes of the test set at the latest evaluation. */
 export interface MnistEvaluation {
@@ -9,12 +10,47 @@ export interface MnistEvaluation {
   confidence: Float32Array;
 }
 
+/** One conv row's output for one input: `[C, H, W]` row-major, after its activation. */
+export interface FeatureMap {
+  /** Index of the row in the network's `conv` list. */
+  row: number;
+  shape: [channels: number, height: number, width: number];
+  data: Float32Array;
+}
+
 /** The network's view of one input (a drawn digit). Evaluation mode. */
 export interface MnistPrediction {
   /** Softmax probabilities of the 10 classes. */
   probs: Float32Array;
-  /** Post-activation values of the first hidden layer (absent with no hidden layer). */
+  /** MLPs: post-activation values of the first hidden layer (absent with no hidden layer). */
   hidden?: Float32Array;
+  /** CNNs: every conv and pool row's output. */
+  maps?: FeatureMap[];
+}
+
+/** A dense layer's weights `[inFeatures, outFeatures]` and biases. */
+export interface FirstLayerWeights {
+  inFeatures: number;
+  outFeatures: number;
+  W: Float32Array;
+  b: Float32Array;
+}
+
+/**
+ * One conv layer's filters. `W` is `[inChannels·k·k, outChannels]`: filter f's
+ * weight for input channel c at kernel row ky, column kx is
+ * `W[(c·k² + ky·k + kx)·outChannels + f]`.
+ */
+export interface ConvFilters {
+  /** Index of the row in the network's `conv` list. */
+  row: number;
+  inChannels: number;
+  outChannels: number;
+  kernel: number;
+  stride: number;
+  padding: Padding;
+  W: Float32Array;
+  b: Float32Array;
 }
 
 /**
@@ -28,6 +64,8 @@ export interface MnistPrediction {
  */
 export interface MnistSnapshot {
   task: 'mnist';
+  /** The network this run trains, so views match the weights even while the builder is being edited. */
+  network: MnistNetworkSpec;
   /** Training examples seen so far. */
   examples: number;
   /** examples / training-set size. */
@@ -44,11 +82,13 @@ export interface MnistSnapshot {
   trainAccuracy: number;
   testAccuracy: number;
   /**
-   * The first dense layer: `[784, units]` row-major, so unit j's 28×28
-   * weight image is `W[p·units + j]` for pixel p. With no hidden layer this is
-   * the output layer, and the units are the 10 classes.
+   * MLPs only: the first dense layer, `[784, units]` row-major, so unit j's
+   * 28×28 weight image is `W[p·units + j]` for pixel p. With no hidden layer
+   * this is the output layer, and the units are the 10 classes.
    */
-  firstLayer: { inFeatures: number; outFeatures: number; W: Float32Array; b: Float32Array };
+  firstLayer?: FirstLayerWeights;
+  /** CNNs only: every conv layer's filters, in order. */
+  filters?: ConvFilters[];
   /** At the latest record. */
   evaluation: MnistEvaluation;
   /** Present when the snapshot was requested with a drawn digit. */
@@ -104,14 +144,15 @@ function historyArrays(...hs: (LossHistorySnapshot | LossHistoryState)[]): Float
 export function mnistSnapshotBuffers(s: MnistSnapshot): ArrayBuffer[] {
   const arrays: (Float32Array | Uint8Array)[] = [
     ...historyArrays(s.losses, s.errors),
-    s.firstLayer.W,
-    s.firstLayer.b,
     s.evaluation.predicted,
     s.evaluation.confidence,
   ];
+  if (s.firstLayer) arrays.push(s.firstLayer.W, s.firstLayer.b);
+  for (const f of s.filters ?? []) arrays.push(f.W, f.b);
   if (s.prediction) {
     arrays.push(s.prediction.probs);
     if (s.prediction.hidden) arrays.push(s.prediction.hidden);
+    for (const m of s.prediction.maps ?? []) arrays.push(m.data);
   }
   return [...new Set(arrays.map((a) => a.buffer as ArrayBuffer))];
 }

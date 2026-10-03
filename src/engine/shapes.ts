@@ -99,3 +99,24 @@ export function inferShapes(layers: readonly LayerConfig[], input: Shape): Infer
   }
   return { shapes };
 }
+
+/** Weights and biases of one layer, and the multiply-adds of its forward pass per example. */
+export function layerCost(
+  config: LayerConfig,
+  output: Shape,
+): { params: number; multiplyAdds: number } {
+  switch (config.kind) {
+    case 'dense': {
+      const { inFeatures: i, outFeatures: o } = config;
+      return { params: i * o + o, multiplyAdds: i * o };
+    }
+    case 'conv2d': {
+      const taps = config.inChannels * config.kernel * config.kernel;
+      const f = config.outChannels;
+      const positions = (output[1] ?? 0) * (output[2] ?? 0);
+      return { params: taps * f + f, multiplyAdds: positions * taps * f };
+    }
+    default:
+      return { params: 0, multiplyAdds: 0 };
+  }
+}
