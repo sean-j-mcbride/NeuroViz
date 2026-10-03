@@ -112,6 +112,17 @@ function sameShape(a: Shape, b: Shape): boolean {
   return a.length === b.length && a.every((d, i) => d === b[i]);
 }
 
+/**
+ * A view of `a` with another shape of the same size, sharing its data (no
+ * copy): writes through either are seen by both.
+ */
+export function reshape(a: Tensor, shape: Shape): Tensor {
+  if (shapeSize(shape) !== a.size) {
+    throw new Error(`reshape: cannot view ${fmt(a.shape)} as ${fmt(shape)}`);
+  }
+  return new Tensor(a.data, shape);
+}
+
 /** Returns `out` after checking its shape, or a fresh zero tensor of `shape`. */
 function target(shape: Shape, out: Tensor | undefined, op: string): Tensor {
   if (!out) return Tensor.zeros(shape);

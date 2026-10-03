@@ -2,6 +2,9 @@ import type { Tensor } from '../tensor';
 
 export type InitKind = 'xavier' | 'he';
 
+/** 'valid': no padding. 'same': pad (k − 1) / 2 zeros, so stride 1 keeps the size (odd k). */
+export type Padding = 'valid' | 'same';
+
 /** Serialisable description of a layer (architecture only, no weights). */
 export type LayerConfig =
   | { kind: 'dense'; inFeatures: number; outFeatures: number; init: InitKind }
@@ -9,6 +12,17 @@ export type LayerConfig =
   | { kind: 'tanh' }
   | { kind: 'sigmoid' }
   | { kind: 'dropout'; rate: number }
+  | {
+      kind: 'conv2d';
+      inChannels: number;
+      outChannels: number;
+      kernel: number;
+      stride: number;
+      padding: Padding;
+      init: InitKind;
+    }
+  | { kind: 'maxpool2d'; size: number; stride: number }
+  | { kind: 'flatten' }
   | { kind: 'sequential'; layers: LayerConfig[] };
 
 export interface Param {
