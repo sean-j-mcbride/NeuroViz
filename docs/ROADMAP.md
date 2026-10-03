@@ -98,6 +98,9 @@ its failure mode next to a pinned run with the fix.
   - Receptive-field highlight: click a feature-map pixel, see the input region.
 - Architecture builder supports 3D tensor shapes with shape validation.
 
+**Done when:** a small CNN reaches ≥ 98 % test accuracy in about a minute in the browser
+(beating the MLP's ~96 %), and its filters, feature maps and receptive fields can be inspected.
+
 ---
 
 ## Stretch ideas
@@ -570,3 +573,122 @@ epochs (about 2.6 s in Node) and are at 95.4–96.2 % after 10 epochs. 349 tests
   Firefox and Safari were not tried.
 - Canvas drawing (tiles, pad, digit images) has no component tests, because jsdom has no 2D
   context. It was checked through driver screenshots in light and dark mode.
+
+### Phase 6 — CNNs (2026-10-03)
+
+**Done:** the MNIST tab trains CNNs as well as MLPs.
+
+- **Engine:**
+  - `Conv2D` (stride, valid/same padding), `MaxPool2D` and `Flatten`;
+  - `shapes.ts`: per-layer shape inference with readable errors, plus parameter and
+    multiply-add counts;
+  - gradient checks for every layer, and a small CNN end to end. The worst error is 1.4e-5 for
+    conv and 3.3e-5 end to end, so even the model check is under 1e-4.
+  - Conv forward matches the direct definition bitwise.
+- **Builder:**
+  - "Start from: MLP | Small CNN";
+  - conv and max-pool rows, each showing its `C × H × W` output, then an automatic Flatten row and
+    the dense layers;
+  - a row that doesn't fit is outlined in red with the reason ("a 5 × 5 kernel doesn’t fit a 4 × 4
+    input"), and Play and Step are disabled until it is fixed;
+  - the hint gives parameter and multiply-add counts.
+- **Filters panel** (it replaces the 28×28 weight tiles for a CNN):
+  - a picker per conv layer;
+  - deeper layers shown as filters × input channels;
+  - per-filter or shared colour scale, hover cards, a table view;
+  - click a kernel to see its weights written in.
+- **Feature maps panel** for the pad's input (a drawing, a gallery "Try", or the new **Test
+  image** button):
+  - every channel of every conv and pool row, coloured by the activation the map has been
+    through;
+  - hover shows values; a table gives per-channel mean, max and share of zeros.
+- **Receptive field:** click any feature-map pixel to outline the part of the input, and of every
+  earlier map, that it is computed from, with a sentence giving the rows and columns. Escape
+  clears it.
+- **Files:** CNN runs save and load and resume exactly. 424 tests.
+
+**Done-when:** the Small CNN template (conv 8 × 5×5 → pool → conv 16 × 5×5 → pool → 10, ReLU;
+Adam lr 0.003, batch 32):
+
+- In the browser (static build, weight seed 1), the first record at ≥ 98 % test comes at epoch
+  5.5, **about 36 s after Play**, at ~6.2 s an epoch.
+- Seeds 1–5 first reach it after 3–8.5 epochs: roughly 19–53 s in the browser.
+- The MLP default plateaus near 96 %.
+- A seeded test asserts ≥ 98 % within 6 epochs (about 30 s in Node).
+
+**Decisions:**
+
+- **CNNs extend the MNIST tab** (agreed in planning). `MnistNetworkSpec = { conv, hidden }`.
+  - With `conv: []` the model config is exactly Phase 5's MLP, so every Phase 5 seeded number
+    is unchanged.
+  - A conv row is conv2d + its activation (He init for ReLU); a pool row is maxpool2d with
+    stride = size.
+  - There is no dropout on feature maps: dropout applies to the dense layers only, and the hint
+    says so.
+- **Layout is NCHW. Conv weights are `[inC·k², outC]`,** the same as Dense, so a filter's kernel
+  is read like a weight tile.
+- **Conv2D is im2col on the existing exact matmul kernels:** forward `col·W`, `dW = colᵀ·dY`,
+  `dx = dY·Wᵀ` (against a transposed copy of W).
+  - Each product is arranged so the kernel skips the operand that is mostly zeros: blank pixels
+    and ReLU zeros in `col`, and the gradient max-pooling blocks in dY.
+  - Measured on the Small CNN: **40 → 29 ms per batch of 64**.
+  - A transposed layout (long inner loops) barely helped. In scalar JS the cost is arithmetic,
+    and only sparsity cuts it.
+  - Matmul's plain-loop rule gained a row limit: products at least 4,096 rows tall always use the
+    fast kernels (conv1 is k·n = 200 over ~37,000 rows). The playground never reaches that (its
+    tallest product is the 2,500-point grid), so its speed is unchanged. All kernels are exact,
+    so results are too.
+- **Conv2D caps its im2col buffer at 16 MB** by working through big batches in chunks of whole
+  images. The builder's largest choices would otherwise need ~640 MB.
+  - Outputs and input gradients are bitwise the same either way. Parameter gradients add one
+    float32 rounding per extra chunk; there is a test for this.
+  - The small template never chunks in training.
+- **Max-pool ties go to the first maximum** in reading order (deterministic). Pool windows that
+  run off the edge are dropped (the size rounds down).
+- **Shape validation has one source:**
+  - `engine/shapes.ts` gives `inferShapes`;
+  - `worker/network.ts` maps it onto rows with `checkConvStack`;
+  - the builder, the session, saved-file validation and the cost hint all use it.
+  - The store keeps an invalid network so the builder can show why, but the worker hook doesn't
+    start a session for it: the last working run stays on screen.
+- **Snapshots carry the network spec** as well as the CNN's filters (a few thousand floats),
+  and every row's feature maps when a digit is drawn. Views therefore always match the weights
+  they show, even while the builder holds an edited or invalid network.
+- **The Small CNN template sets lr 0.003 and batch 32;** MLP restores 0.001 and 64. The other
+  hyperparameters are left alone. From the seeded sweeps:
+  - at lr 0.001 the CNN was still at 96.6–97.3 % after 6 epochs;
+  - batch 64 at lr 0.003 needed 4–7.5 epochs;
+  - a 16/32-filter net took 2.3× as long per epoch for no faster climb;
+  - 3×3 'same' kernels and an extra dense 64 layer were no better.
+- **Receptive fields are pure geometry** (`viz/receptiveField.ts`), clipped at padded edges at
+  every level. A brute-force test nudges each input pixel through the real engine:
+  - conv stacks depend on exactly the computed rectangle;
+  - through max-pooling, the dependencies fall inside it.
+- **Viz renderers are registered by kind** in `viz/layerViews.ts`: name, filters or not, and the
+  activation that sets a map's colour scale (a pool inherits its conv's). Maps use the
+  playground's diverging scale and `NORMALISERS`, so ReLU maps read white → blue, like ReLU tiles.
+- **MNIST model files are format 2** (`network.conv`). Version 1 files load as MLPs.
+- **The Network column is 280 px wide** (was 220). Conv rows take three lines: filters and
+  kernel; activation, stride and padding; then the output shape or the error.
+- The run-neuroviz driver gained `clickat`, which scrolls the element into view and clicks at a
+  point in it. Its notes now say to scope MNIST selectors to `.mnist-page`, because both tabs
+  stay mounted.
+
+**Known issues:**
+
+- **98 % is reached, not held.** After its first 98 % record the Small CNN hovers between about
+  97 % and 98.6 %. One test image is 0.05 %, and with only 10,000 training images it is close
+  to its ceiling. Seed 5 takes 8.5 epochs (~53 s).
+- **The CNN is still slow per image:** ~6 s an epoch, against the MLP's ~0.4 s. JS is scalar,
+  and the conv layers do 3× the MLP's arithmetic over less sparse data. WebGPU (stretch) is the
+  real fix. Big networks (32 filters, same padding) train at a crawl; the multiply-add count in
+  the hint warns of this.
+- **Evaluation takes about a fifth of CNN training time**: 3,000 images every 5,000.
+- **Feature maps come only with a drawn or chosen input,** in the snapshot after it changes. For
+  a moment after a new drawing, the maps can belong to the previous one.
+- **Gaps between feature-map tiles scale with each layer's pixel size,** so deep 4×4 maps look
+  chunky. That is deliberate: equal tile sizes, with the labels giving the true `C × H × W`.
+- **No gradient views for CNNs** (no histograms, dead-filter flags or step-through), and no MNIST
+  share links, presets or compare, as in Phase 5.
+- **Canvas drawing has no component tests** (jsdom has no 2D context). It was checked through
+  driver screenshots in light and dark mode. Only headless Chrome was tried.
