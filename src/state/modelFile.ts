@@ -33,6 +33,8 @@ import { parseConfig } from './validate';
  */
 
 export const MODEL_FILE_FORMAT = 'neuroviz-model';
+/** Saved MNIST runs (see mnistModelFile.ts); named here so each loader can redirect the other's files. */
+export const MNIST_MODEL_FILE_FORMAT = 'neuroviz-mnist-model';
 /**
  * 2 added the settings log (`checkpoint.hyperparamLog`), the charts' history
  * (`checkpoint.history`) and bounded loss curves (`checkpoint.losses`, which
@@ -66,11 +68,13 @@ export function formatFloat32(v: number): string {
   return String(v);
 }
 
-const formatArray = (a: Float32Array | Uint32Array): string =>
+export const formatArray = (a: Float32Array | Uint32Array): string =>
   `[${Array.from(a, a instanceof Float32Array ? formatFloat32 : String).join(', ')}]`;
 
-const mapValues = <A, B>(o: Record<string, A>, f: (a: A, key: string) => B): Record<string, B> =>
-  Object.fromEntries(Object.entries(o).map(([k, v]) => [k, f(v, k)]));
+export const mapValues = <A, B>(
+  o: Record<string, A>,
+  f: (a: A, key: string) => B,
+): Record<string, B> => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, f(v, k)]));
 
 const HISTORY_NOTE =
   'Display only: the histogram timeline and hover sparklines, so the charts carry on after ' +
@@ -130,7 +134,7 @@ function lossCurveBlock(c: LossCurveState, merged: boolean, raw: (a: Float32Arra
   };
 }
 
-function lossesBlock(l: LossHistoryState, raw: (a: Float32Array) => string) {
+export function lossesBlock(l: LossHistoryState, raw: (a: Float32Array) => string) {
   const merged = l.width > 1;
   return {
     width: l.width,
@@ -175,17 +179,17 @@ export function serialiseModelFile(
 
 // ── Reading ─────────────────────────────────────────────────────────────────
 
-const fail = (message: string): never => {
+export const fail = (message: string): never => {
   throw new ModelFileError(message);
 };
 
-function record(v: unknown, path: string): Record<string, unknown> {
+export function record(v: unknown, path: string): Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
     ? (v as Record<string, unknown>)
     : fail(`${path} is missing or not an object`);
 }
 
-function int(v: unknown, path: string, max = Number.MAX_SAFE_INTEGER): number {
+export function int(v: unknown, path: string, max = Number.MAX_SAFE_INTEGER): number {
   return Number.isInteger(v) && (v as number) >= 0 && (v as number) <= max
     ? (v as number)
     : fail(`${path} must be a whole number from 0 to ${max}`);
@@ -213,7 +217,7 @@ function uints(v: unknown, path: string): Uint32Array {
   return Uint32Array.from(v, (x: unknown, i) => int(x, `${path}[${i}]`, 2 ** 32 - 1));
 }
 
-function rngState(v: unknown, path: string): RngState {
+export function rngState(v: unknown, path: string): RngState {
   const r = record(v, path);
   const spare = r.spare;
   if (spare !== null && !(typeof spare === 'number' && Number.isFinite(spare))) {
@@ -222,7 +226,7 @@ function rngState(v: unknown, path: string): RngState {
   return { state: int(r.state, `${path}.state`, 2 ** 32 - 1), spare: spare as number | null };
 }
 
-const OPTIMISERS: readonly OptimiserKind[] = ['sgd', 'momentum', 'adam'];
+export const OPTIMISERS: readonly OptimiserKind[] = ['sgd', 'momentum', 'adam'];
 
 function optimiserState(v: unknown, path: string): OptimiserState {
   const o = record(v, path);
@@ -251,7 +255,7 @@ function hyperparamChange(v: unknown, path: string): HyperparamChange {
   return { epoch: int(e.epoch, `${path}.epoch`), hyperparams: config.training };
 }
 
-function decoded<T>(decode: () => T, path: string): T {
+export function decoded<T>(decode: () => T, path: string): T {
   try {
     return decode();
   } catch (e) {
@@ -259,7 +263,7 @@ function decoded<T>(decode: () => T, path: string): T {
   }
 }
 
-function str(v: unknown, path: string): string {
+export function str(v: unknown, path: string): string {
   return typeof v === 'string' ? v : fail(`${path} must be text`);
 }
 
@@ -354,13 +358,18 @@ function losses(c: Record<string, unknown>, version: number): LossHistoryState {
     if (train.length !== test.length) fail('checkpoint.trainLoss and testLoss differ in length');
     return LossHistory.fromSeries(train, test).exportState();
   }
-  const l = record(c.losses, 'checkpoint.losses');
-  const width = int(l.width, 'checkpoint.losses.width');
+  return lossHistory(c.losses, 'checkpoint.losses');
+}
+
+/** A loss history as `lossesBlock` writes it. */
+export function lossHistory(v: unknown, path: string): LossHistoryState {
+  const l = record(v, path);
+  const width = int(l.width, `${path}.width`);
   return {
     width,
-    count: int(l.count, 'checkpoint.losses.count'),
-    train: lossCurve(l.train, width, 'checkpoint.losses.train'),
-    test: lossCurve(l.test, width, 'checkpoint.losses.test'),
+    count: int(l.count, `${path}.count`),
+    train: lossCurve(l.train, width, `${path}.train`),
+    test: lossCurve(l.test, width, `${path}.test`),
   };
 }
 
@@ -402,6 +411,9 @@ export function parseModelFile(text: string): ModelFile {
     fail('This file is not valid JSON, so it can’t be a saved NeuroViz model.');
   }
   const d = record(doc, 'The file');
+  if (d.format === MNIST_MODEL_FILE_FORMAT) {
+    fail('This is a saved MNIST model: load it from the MNIST tab.');
+  }
   if (d.format !== MODEL_FILE_FORMAT) fail('This is not a saved NeuroViz model.');
   if (typeof d.version === 'number' && d.version > MODEL_FILE_VERSION) {
     fail(
