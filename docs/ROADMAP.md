@@ -449,3 +449,124 @@ All six were fixed in the follow-up below.
   the x-axis can get busy.
 - Loading a reference from a file still rebuilds its session on the main thread (milliseconds at
   this scale).
+
+### Phase 5 — MNIST with an MLP (2026-10-03)
+
+**Done:** A **Playground | MNIST** tab switch. The MNIST tab trains an MLP on a bundled, seeded,
+digit-stratified subset:
+
+- 10,000 images from the official training set and 2,000 from the official test set;
+- 1,000 and 200 of each digit;
+- `public/mnist-subset-v1.bin.gz`, 1.97 MB, rebuilt byte for byte by `npm run data:mnist`.
+
+It shows:
+
+- the **first-layer weights as 28×28 tiles**, scaled per tile or shared, with hover, click to
+  enlarge and a table view; with no hidden layer they are the 10 class templates;
+- a **draw-a-digit pad** with live prediction bars, and the most active units outlined on the tiles;
+- a **confusion matrix** with every count written in; clicking a mistake filters the gallery;
+- a **gallery of the most confidently wrong** test images, each of which can be tried on the pad;
+- loss and error-rate curves.
+
+MNIST runs **save and load** and resume exactly, even mid-epoch. **Performance pass:** an exact,
+faster `matmul`, a skipped input gradient for the first layer, and grow-only layer buffers.
+
+**Done-when:** the default 784 → 128 ReLU → 10 network (Adam, lr 0.001, batch 64) reaches **95 %
+test accuracy about 4 s after Play** in the browser (static build, ~2.2 epochs/s). After 20 s it
+is at ~96 %. A seeded test asserts ≥ 95 % within 6 epochs. Seeds 1–5 first reach it after 5–6
+epochs (about 2.6 s in Node) and are at 95.4–96.2 % after 10 epochs. 349 tests.
+
+**Decisions:**
+
+- **MNIST is its own session, snapshot and page** (agreed in planning). The playground's session
+  cannot stretch to 784 inputs:
+  - every snapshot runs a full-batch gradient;
+  - the sparkline ring would be ~40 MB;
+  - the graph would need ~100k SVG edges.
+
+  `MnistSession` shares the engine, `LossHistory`, the optimisers' save/load, the controller and
+  `TrainingClient`. The controller drives either kind of session through a small `WorkerSession`
+  interface, picked by `config.task`.
+
+- **The unit of work is one mini-batch,** not an epoch. An epoch (~0.4 s) is far longer than the
+  worker's 12 ms slice, so Pause and snapshots would lag. Step trains one batch, and Speed is in
+  batches/s (30 / 100 / 300 / Max; Max by default).
+- **Metrics are recorded every 5,000 training examples** (twice an epoch), so the x-axis is linear
+  in examples even if the batch size changes. Each record runs in evaluation mode:
+  - loss and error on a fixed 1,000-image training subset (the same for every run) and on all
+    2,000 test images;
+  - each test image's predicted class and confidence.
+
+  That costs ~21 % of training time. Every 2,000 examples cost 41 %, which is why the interval is
+  5,000. Snapshots then take ~0.03 ms. Error rate (1 − accuracy) reuses `LossHistory` unchanged,
+  since lower is better there as for loss.
+
+- **Each snapshot carries every test image's prediction and confidence** (10 KB), rather than a
+  top-24 list as planned. The confusion matrix, the gallery and its per-cell filter all come from
+  that one source, in `viz/mnistResults.ts`.
+- **Pixels stay as bytes** (9.4 MB, not 37 MB as float32). `gatherImages` scales them into each
+  batch. The parsed subset goes to the worker in `init` (structured clone); the UI keeps its own
+  copy for the gallery.
+- **`matmul` is bitwise identical to before.** The new kernels:
+  - reorder the loops so the inner loop is contiguous;
+  - accumulate each element in float64 in the original order (a float32 × float32 product is exact
+    in float64);
+  - skip zero a-values, only when b is finite, so 0 · Inf still gives NaN.
+
+  Small products (k · n < 256) keep the plain loop, whose set-up costs less at the playground's
+  sizes. Every transpose combination is compared bitwise against the old loop, and a mutation
+  (float32 accumulators) fails that test. All existing tests, including the seeded preset numbers,
+  pass unchanged.
+
+  Measured in Node:
+  - a 784-128-10 epoch: 2.5 s → 0.33 s;
+  - the spirals: unchanged at ~4,200 epochs/s;
+  - in the browser at Max: still ~4,600 epochs/s.
+
+- **`Dense.inputGrad = false`** on a model's first layer skips the unused ∂L/∂x, a third of that
+  layer's backward cost at 784 inputs. It is gradient-checked: the parameter gradients are identical
+  and the input gradient is zeros.
+- **`TensorBuffer`** gives layers and losses grow-only output buffers with views, so alternating
+  batch sizes no longer reallocates. This fixes the Phase 2 known issue.
+- **Default: 1 × 128 ReLU, Adam, lr 0.001, batch 64**, from a sweep of six settings × 3 seeds over
+  30 epochs. Wider nets (256) or two layers gain ≤ 0.5 points at up to twice the cost.
+- **Drawn digits are preprocessed like MNIST** (`data/drawing.ts`):
+  - crop to the ink;
+  - area-average the longer side to 20 px;
+  - centre the centre of mass in 28×28.
+
+  "Try" from the gallery passes the exact test image instead, so the pad agrees with the gallery.
+
+- **Model-file format `neuroviz-mnist-model` v1.** Settings and curves are readable. Weights,
+  optimiser state, order and test predictions are base64. The default net with Adam is ~1.6 MB.
+  Loading:
+  - checks the data checksum and the settings;
+  - builds the session the file describes on the main thread (milliseconds: resuming skips
+    evaluation) before anything is replaced.
+
+  Each tab's loader sends the other tab's files to the right tab.
+
+- **Tabs:** leaving a tab pauses its run and keeps it. The MNIST worker and data start on the first
+  visit. The hash is `#mnist` while that tab shows, and the playground's link otherwise.
+- **Colour:** the weight tiles use the playground's sign colours, so sign reads the same on both
+  tabs. The confusion matrix colours only the mistakes, on the validated sequential ramp scaled to
+  the largest mistake, with the diagonal outlined. All its numbers are written in, so it doubles as
+  its own table.
+- The run-neuroviz driver gained `draw` for the pad. `goto` and `reload` now work on either tab.
+
+**Known issues:**
+
+- No MNIST share links, presets or compare (out of scope by agreement), and no gradient histograms,
+  dead-unit flags or settings-change ticks for MNIST.
+- The first record comes after 5,000 images, so the curves jump from chance to ~90 % in one step.
+- The default net overfits (100 % train, ~96 % test by epoch 20). Border pixels are almost always
+  blank, so their weights keep their random start and the tiles look noisy. L2 0.001 clears both:
+  96.7 % test and clean stroke detectors after 15 s, though a few ReLU tiles go blank (dead).
+- The gallery's confidences come from the last record, while "Try" uses the current weights, so the
+  two can differ a little mid-record.
+- With 2,000 test images, one image is 0.05 %, so the test accuracy wobbles by a few tenths between
+  records.
+- Only checked in headless Chrome. `DecompressionStream` and pointer events are standard, but
+  Firefox and Safari were not tried.
+- Canvas drawing (tiles, pad, digit images) has no component tests, because jsdom has no 2D
+  context. It was checked through driver screenshots in light and dark mode.
