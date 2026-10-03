@@ -22,9 +22,25 @@ interface LossCurveProps extends LossSeries {
   logScale: boolean;
   /** A pinned run, drawn behind in the reference colour (same dashes: solid train, dashed test). */
   reference?: LossSeries | null;
+  /**
+   * How to name a point on the x-axis (the history's record index), e.g.
+   * "epoch 12" (the default: one record per epoch) or "epoch 2.5".
+   */
+  xName?: (index: number) => string;
+  /** A merged bucket's span in the tooltip, e.g. "epochs 4,096–4,103" (the default). */
+  xRange?: (from: number, to: number) => string;
+  /** Values in the tooltip (default: 4 decimals) and on the axis. */
+  formatValue?: (v: number) => string;
+  formatTick?: (v: number) => string;
+  /** What the chart shows, for screen readers. */
+  label?: string;
 }
 
-function formatTick(v: number): string {
+const epochName = (i: number) => `epoch ${i.toLocaleString('en-GB')}`;
+const epochRange = (from: number, to: number) =>
+  `epochs ${from.toLocaleString('en-GB')}–${to.toLocaleString('en-GB')}`;
+
+function formatAxisTick(v: number): string {
   if (v === 0) return '0';
   return Math.abs(v) >= 0.01 && Math.abs(v) < 1000 ? v.toPrecision(2) : v.toExponential(0);
 }
@@ -34,12 +50,17 @@ function formatLoss(v: number): string {
 }
 
 /** "0.3142", or for a merged bucket "0.3142 (0.2901–0.3550, epochs 4,096–4,103)". */
-function formatAt(at: LossAt | null): string {
+function formatAt(
+  at: LossAt | null,
+  format: (v: number) => string,
+  xRange: (from: number, to: number) => string,
+): string {
   if (!at) return '–';
-  if (at.from === at.to) return formatLoss(at.mean);
-  const e = (n: number) => n.toLocaleString('en-GB');
-  return `${formatLoss(at.mean)} (${formatLoss(at.min)}–${formatLoss(at.max)}, epochs ${e(at.from)}–${e(at.to)})`;
+  if (at.from === at.to) return format(at.mean);
+  return `${format(at.mean)} (${format(at.min)}–${format(at.max)}, ${xRange(at.from, at.to)})`;
 }
+
+const capitalise = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
 
 /** Plot geometry shared by drawing and hover. */
 function layout(width: number, epochs: number) {
@@ -56,7 +77,17 @@ function layout(width: number, epochs: number) {
  * drawn point stands for several epochs (long runs), a faint band shows their
  * range, so spikes stay visible. Hover shows every value at that epoch.
  */
-export function LossCurve({ losses, changes, logScale, reference }: LossCurveProps) {
+export function LossCurve({
+  losses,
+  changes,
+  logScale,
+  reference,
+  xName = epochName,
+  xRange = epochRange,
+  formatValue = formatLoss,
+  formatTick = formatAxisTick,
+  label = 'Loss per epoch',
+}: LossCurveProps) {
   const wrap = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLCanvasElement>(null);
   const width = useElementWidth(wrap);
@@ -111,7 +142,7 @@ export function LossCurve({ losses, changes, logScale, reference }: LossCurvePro
     ctx.textBaseline = 'top';
     ctx.fillText('0', PAD.left, HEIGHT - PAD.bottom + 5);
     ctx.textAlign = 'right';
-    ctx.fillText(`epoch ${n - 1}`, width - PAD.right, HEIGHT - PAD.bottom + 5);
+    ctx.fillText(xName(n - 1), width - PAD.right, HEIGHT - PAD.bottom + 5);
 
     // At most ~2 points per pixel; each stands for its epochs' mean, with their range as a band.
     const usable = (v: number) => Number.isFinite(v) && (!logScale || v > 0);
@@ -197,7 +228,7 @@ export function LossCurve({ losses, changes, logScale, reference }: LossCurvePro
       ctx.fillStyle = muted;
       ctx.fillText(label, x, y);
     }
-  }, [losses, changes, reference, epochs, logScale, width, dark]);
+  }, [losses, changes, reference, epochs, logScale, width, dark, xName, formatTick]);
 
   const onMove = (e: MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -207,7 +238,8 @@ export function LossCurve({ losses, changes, logScale, reference }: LossCurvePro
 
   const rows: [string, string][] = [];
   if (hover) {
-    const at = (c: LossCurveSummary, l: LossHistorySnapshot) => formatAt(lossAt(c, l, hover.epoch));
+    const at = (c: LossCurveSummary, l: LossHistorySnapshot) =>
+      formatAt(lossAt(c, l, hover.epoch), formatValue, xRange);
     const prefix = reference ? 'This run, ' : '';
     rows.push(
       [`${prefix}train`, at(losses.train, losses)],
@@ -239,7 +271,7 @@ export function LossCurve({ losses, changes, logScale, reference }: LossCurvePro
         style={{ width: '100%', height: HEIGHT }}
         onMouseMove={onMove}
         onMouseLeave={() => setHover(null)}
-        aria-label="Loss per epoch"
+        aria-label={label}
         role="img"
       />
       {crosshairX !== null && (
@@ -248,7 +280,9 @@ export function LossCurve({ losses, changes, logScale, reference }: LossCurvePro
           style={{ left: crosshairX, top: PAD.top, height: HEIGHT - PAD.top - PAD.bottom }}
         />
       )}
-      {hover && <Tooltip x={hover.x} y={hover.y} title={`Epoch ${hover.epoch}`} rows={rows} />}
+      {hover && (
+        <Tooltip x={hover.x} y={hover.y} title={capitalise(xName(hover.epoch))} rows={rows} />
+      )}
     </div>
   );
 }

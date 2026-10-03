@@ -7,11 +7,33 @@ const OPTIMISERS: { value: Hyperparams['optimiser']; title: string }[] = [
   { value: 'adam', title: 'Adam (β₁ = 0.9, β₂ = 0.999)' },
 ];
 
-/** Optimiser and regularisation settings; all apply live without resetting training. */
+export interface HyperparamControlsProps {
+  optimiser: Hyperparams['optimiser'];
+  l2: number;
+  dropout: number;
+  onTraining(patch: Partial<Hyperparams>): void;
+}
+
+/** The playground's optimiser and regularisation settings, wired to the app store. */
 export function OptimiserControls() {
   const { optimiser, l2, dropout } = useAppStore((s) => s.config.training);
-  const setTraining = useAppStore.getState().setTraining;
+  return (
+    <HyperparamControls
+      optimiser={optimiser}
+      l2={l2}
+      dropout={dropout}
+      onTraining={useAppStore.getState().setTraining}
+    />
+  );
+}
 
+/** Optimiser and regularisation settings; all apply live without resetting training. */
+export function HyperparamControls({
+  optimiser,
+  l2,
+  dropout,
+  onTraining: setTraining,
+}: HyperparamControlsProps) {
   return (
     <div className="transport optimiser-controls">
       <label className="field">

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FromWorker, SessionConfig, Snapshot, ToWorker } from '../worker';
 import { TrainingController } from '../worker/controller';
-import { type ClientHandlers, TrainingClient } from './trainingClient';
+import { type ClientHandlers, type MnistTask, TrainingClient } from './trainingClient';
 
 const CONFIG: SessionConfig = {
   dataset: { kind: 'circle', n: 100, noise: 0, seed: 1 },
@@ -106,6 +106,25 @@ describe('TrainingClient (unit)', () => {
     const [first, second] = requests();
     expect(first).not.toHaveProperty('probe');
     expect(second).toMatchObject({ probe: { set: 'test', index: 4 } });
+  });
+
+  it('attaches a copy of the drawn digit (MNIST) to each request', () => {
+    let drawn: Float32Array | null = null;
+    const sent: ToWorker[] = [];
+    const client = new TrainingClient<MnistTask>(
+      { onData: () => {}, onSnapshot: () => {}, onError: () => {} },
+      { now: () => 0, drawn: () => drawn },
+    );
+    client.attach((m) => sent.push(m));
+    client.requestSnapshot();
+    drawn = new Float32Array(784).fill(0.5);
+    client.receive({ type: 'error', message: 'stale' }); // clears the in-flight request
+    client.requestSnapshot();
+    const [first, second] = sent.filter((m) => m.type === 'snapshot');
+    expect(first).not.toHaveProperty('drawn');
+    if (second?.type !== 'snapshot' || !second.drawn) throw new Error('no drawn digit');
+    expect(second.drawn).toEqual(drawn);
+    expect(second.drawn).not.toBe(drawn); // the pad keeps its own array
   });
 
   it('an error clears the in-flight request', () => {

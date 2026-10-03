@@ -70,7 +70,9 @@ try {
   await browser.close();
   process.exit(1);
 }
-await page.waitForSelector('.inside-panel'); // last panel to render: first snapshot has arrived
+// The last panel to render on either tab: its first snapshot has arrived.
+const READY = '.inside-panel:visible, #page-mnist .training-panel';
+await page.waitForSelector(READY);
 
 const print = (cmd, result) => console.log(JSON.stringify({ cmd, ...result }));
 const epoch = async () => Number((await page.textContent('.readout-value')).replace(/,/g, ''));
@@ -115,6 +117,29 @@ const commands = {
     await page.mouse.move(box.x + fx * box.width, box.y + fy * box.height);
     await page.waitForTimeout(200);
     return { tooltip: await tooltip() };
+  },
+  /**
+   * draw SELECTOR FX,FY FX,FY … [| FX,FY …] — press, drag through the points (fractions of the
+   * element's box) and release; `|` starts a new stroke. For the MNIST digit pad.
+   */
+  async draw(...words) {
+    const at = words.findIndex((w) => /^[\d.]+,[\d.]+$/.test(w));
+    const box = await page.locator(words.slice(0, at).join(' ')).first().boundingBox();
+    const strokes = words
+      .slice(at)
+      .join(' ')
+      .split('|')
+      .map((s) => s.trim().split(/\s+/));
+    for (const stroke of strokes) {
+      const pts = stroke.map((p) => p.split(',').map(Number));
+      const xy = ([fx, fy]) => [box.x + fx * box.width, box.y + fy * box.height];
+      await page.mouse.move(...xy(pts[0]));
+      await page.mouse.down();
+      for (const p of pts.slice(1)) await page.mouse.move(...xy(p), { steps: 8 });
+      await page.mouse.up();
+    }
+    await page.waitForTimeout(300);
+    return {};
   },
   async wait(ms) {
     await page.waitForTimeout(Number(ms));
@@ -282,13 +307,13 @@ const commands = {
   /** goto URL — load a URL (e.g. a share link), wait for the first snapshot. */
   async goto(target) {
     await page.goto(target);
-    await page.waitForSelector('.inside-panel');
+    await page.waitForSelector(READY);
     return { url: page.url(), notice: await noticeText() };
   },
   /** reload — reload the page (keeping the hash), wait for the first snapshot. */
   async reload() {
     await page.reload();
-    await page.waitForSelector('.inside-panel');
+    await page.waitForSelector(READY);
     return { url: page.url() };
   },
   /** url — the current address, including the settings hash. */

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { presetFor } from '../state/presets';
 import { decodeLink, encodeLink } from '../state/shareUrl';
 import { sameConfig, useAppStore } from '../state/store';
+import { MNIST_HASH, tabForHash, useTabStore } from '../state/tab';
 
 /**
  * Coalesces hash updates while a slider is dragged: Safari throws after 100
@@ -33,23 +34,31 @@ export function applyHash(hash: string): boolean {
   return true;
 }
 
-/** Keeps the URL hash in step with the settings, and follows links pasted into this tab. */
+/**
+ * Keeps the URL hash in step with the playground's settings (or `#mnist` while
+ * the MNIST tab shows), and follows links pasted into this browser tab.
+ */
 export function useUrlSync(): void {
   const config = useAppStore((s) => s.config);
   const speed = useAppStore((s) => s.speed);
   const showTestData = useAppStore((s) => s.showTestData);
+  const tab = useTabStore((s) => s.tab);
 
   useEffect(() => {
     const t = setTimeout(() => {
-      const hash = encodeLink(config, { speed, showTestData });
+      const hash = tab === 'mnist' ? MNIST_HASH : encodeLink(config, { speed, showTestData });
       // replaceState: settings changes shouldn't fill the Back button's history.
       if (location.hash !== hash) history.replaceState(history.state, '', hash);
     }, DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [config, speed, showTestData]);
+  }, [config, speed, showTestData, tab]);
 
   useEffect(() => {
-    const onHashChange = () => applyHash(location.hash);
+    const onHashChange = () => {
+      const linked = tabForHash(location.hash);
+      useTabStore.getState().setTab(linked);
+      if (linked === 'playground') applyHash(location.hash);
+    };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
