@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import type { Checkpoint } from './checkpoint';
 import { type Post, type Scheduler, TrainingController } from './controller';
+import { isMnistSnapshot } from './mnistSnapshot';
 import type { FromWorker, ToWorker } from './protocol';
 import type { SessionConfig } from './session';
 
@@ -65,7 +67,9 @@ function setup(costMs?: number) {
     const reply = sent.at(-1)!.message;
     if (reply.type !== 'snapshot') throw new Error(`expected a snapshot, got ${reply.type}`);
     expect(reply.requestId).toBe(requestId);
-    return reply;
+    const { snapshot } = reply;
+    if (isMnistSnapshot(snapshot)) throw new Error('expected a playground snapshot');
+    return { ...reply, snapshot };
   };
   return { scheduler, sent, send, snap };
 }
@@ -76,7 +80,7 @@ describe('TrainingController', () => {
     send({ type: 'init', sessionId: 7, config: CONFIG });
     const ready = sent[0]!;
     expect(ready.message.type).toBe('ready');
-    if (ready.message.type !== 'ready') return;
+    if (ready.message.type !== 'ready' || 'task' in ready.message.data) return;
     expect(ready.message.sessionId).toBe(7);
     expect(ready.message.data.train.x).toHaveLength(70 * 2);
     expect(ready.transfer).toHaveLength(4);
@@ -177,12 +181,13 @@ describe('TrainingController', () => {
     const { message, transfer } = sent.at(-1)!;
     if (message.type !== 'checkpoint')
       throw new Error(`expected a checkpoint, got ${message.type}`);
-    expect([message.sessionId, message.requestId, message.checkpoint.epoch]).toEqual([1, 9, 3]);
+    const saved = message.checkpoint as Checkpoint;
+    expect([message.sessionId, message.requestId, saved.epoch]).toEqual([1, 9, 3]);
     // Losses (mean, min, max × 2), order, 4 params, 2 Adam slots per param;
     // chart history: 3 arrays + 4 per layer.
     expect(transfer).toHaveLength(6 + 1 + 4 + 8 + 3 + 2 * 4);
 
-    const checkpoint = structuredClone(message.checkpoint);
+    const checkpoint = structuredClone(saved);
     send({
       type: 'init',
       sessionId: 2,

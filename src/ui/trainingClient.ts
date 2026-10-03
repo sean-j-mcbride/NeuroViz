@@ -2,6 +2,10 @@ import type {
   Checkpoint,
   FromWorker,
   Hyperparams,
+  MnistCheckpoint,
+  MnistSessionConfig,
+  MnistSessionData,
+  MnistSnapshot,
   ProbeRef,
   SessionConfig,
   SessionData,
@@ -10,19 +14,43 @@ import type {
   ToWorker,
 } from '../worker';
 
+/** The message payload types of one task; a client drives sessions of one task only. */
+export interface TaskTypes {
+  config: SessionConfig | MnistSessionConfig;
+  data: SessionData | MnistSessionData;
+  snapshot: Snapshot | MnistSnapshot;
+  checkpoint: Checkpoint | MnistCheckpoint;
+}
+
+export interface PlaygroundTask extends TaskTypes {
+  config: SessionConfig;
+  data: SessionData;
+  snapshot: Snapshot;
+  checkpoint: Checkpoint;
+}
+
+export interface MnistTask extends TaskTypes {
+  config: MnistSessionConfig;
+  data: MnistSessionData;
+  snapshot: MnistSnapshot;
+  checkpoint: MnistCheckpoint;
+}
+
 /** At most ~15 snapshot requests per second while training. */
 export const SNAPSHOT_INTERVAL_MS = 66;
 
-export interface ClientHandlers {
-  onData(data: SessionData): void;
-  onSnapshot(snapshot: Snapshot): void;
+export interface ClientHandlers<T extends TaskTypes = PlaygroundTask> {
+  onData(data: T['data']): void;
+  onSnapshot(snapshot: T['snapshot']): void;
   onError(message: string): void;
 }
 
 export interface ClientOptions {
   now(): number;
-  /** The step-through point to trace, read when each request is sent. */
-  probe(): ProbeRef | null | undefined;
+  /** Playground: the step-through point to trace, read when each request is sent. */
+  probe?(): ProbeRef | null | undefined;
+  /** MNIST: the drawn digit to classify, read when each request is sent. */
+  drawn?(): Float32Array | null | undefined;
   intervalMs?: number;
 }
 
@@ -35,7 +63,7 @@ export interface ClientOptions {
  * `intervalMs`, so a slow UI asks less often instead of building a backlog.
  * Each `init` starts a new session id; replies from older sessions are dropped.
  */
-export class TrainingClient {
+export class TrainingClient<T extends TaskTypes = PlaygroundTask> {
   private post: ((msg: ToWorker) => void) | null = null;
   private sessionId = 0;
   private requestId = 0;
@@ -46,11 +74,11 @@ export class TrainingClient {
   /** Checkpoint requests awaiting a reply, by request id. */
   private readonly checkpoints = new Map<
     number,
-    { sessionId: number; resolve(c: Checkpoint): void; reject(e: Error): void }
+    { sessionId: number; resolve(c: T['checkpoint']): void; reject(e: Error): void }
   >();
 
   constructor(
-    private readonly handlers: ClientHandlers,
+    private readonly handlers: ClientHandlers<T>,
     private readonly options: ClientOptions,
   ) {
     this.intervalMs = options.intervalMs ?? SNAPSHOT_INTERVAL_MS;
@@ -73,7 +101,7 @@ export class TrainingClient {
     this.checkpoints.clear();
   }
 
-  init(config: SessionConfig): void {
+  init(config: T['config']): void {
     if (!this.post) return;
     this.sessionId++;
     this.post({ type: 'init', sessionId: this.sessionId, config });
@@ -117,8 +145,15 @@ export class TrainingClient {
     this.inFlight = true;
     this.queued = false;
     this.lastRequest = this.options.now();
-    const probe = this.options.probe();
-    this.post({ type: 'snapshot', requestId: ++this.requestId, ...(probe && { probe }) });
+    const probe = this.options.probe?.();
+    // A copy: the caller keeps its drawing, and the message may be transferred.
+    const drawn = this.options.drawn?.()?.slice();
+    this.post({
+      type: 'snapshot',
+      requestId: ++this.requestId,
+      ...(probe && { probe }),
+      ...(drawn && { drawn }),
+    });
   }
 
   /**
@@ -126,7 +161,7 @@ export class TrainingClient {
    * earlier is applied first (the worker handles messages in order). Rejects
    * if the session is replaced before the reply arrives.
    */
-  requestCheckpoint(): Promise<Checkpoint> {
+  requestCheckpoint(): Promise<T['checkpoint']> {
     const post = this.post;
     if (!post) return Promise.reject(new Error('The training worker is not running'));
     const requestId = ++this.requestId;
@@ -142,7 +177,7 @@ export class TrainingClient {
     if (pending) {
       this.checkpoints.delete(requestId!);
       if (msg.type === 'checkpoint' && msg.sessionId === this.sessionId) {
-        pending.resolve(msg.checkpoint);
+        pending.resolve(msg.checkpoint as T['checkpoint']);
       } else {
         pending.reject(
           new Error(
@@ -154,11 +189,13 @@ export class TrainingClient {
     }
     switch (msg.type) {
       case 'ready':
-        if (msg.sessionId === this.sessionId) this.handlers.onData(msg.data);
+        if (msg.sessionId === this.sessionId) this.handlers.onData(msg.data as T['data']);
         return;
       case 'snapshot':
         this.inFlight = false;
-        if (msg.sessionId === this.sessionId) this.handlers.onSnapshot(msg.snapshot);
+        if (msg.sessionId === this.sessionId) {
+          this.handlers.onSnapshot(msg.snapshot as T['snapshot']);
+        }
         if (this.queued) this.requestSnapshot();
         return;
       case 'checkpoint':

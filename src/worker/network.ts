@@ -10,8 +10,9 @@ export interface HiddenLayerSpec {
 }
 
 /**
- * Compact, serialisable description of a 2D-playground MLP: 2 inputs, the
- * hidden layers, then a single linear output unit (a logit for BCE).
+ * Compact, serialisable description of an MLP's hidden layers. The inputs and
+ * outputs come from the task: the 2D playground has 2 inputs and a single
+ * linear output unit (a logit for BCE); MNIST has 784 inputs and 10 logits.
  */
 export interface NetworkSpec {
   hidden: HiddenLayerSpec[];
@@ -25,18 +26,23 @@ function initFor(activation: Activation): InitKind {
 
 /**
  * Expands a spec to an engine model config: [dense, activation?, dropout]* then
- * dense(→1). The dropout layers are always present (rate 0 is the identity) so
- * the rate can change mid-run without rebuilding the model.
+ * a linear dense(→outputs). The dropout layers are always present (rate 0 is
+ * the identity) so the rate can change mid-run without rebuilding the model.
  */
-export function networkToLayerConfig(spec: NetworkSpec, dropout = 0): LayerConfig {
+export function networkToLayerConfig(
+  spec: NetworkSpec,
+  dropout = 0,
+  inputs = INPUTS,
+  outputs = 1,
+): LayerConfig {
   const layers: LayerConfig[] = [];
-  let inFeatures = INPUTS;
+  let inFeatures = inputs;
   for (const { units, activation } of spec.hidden) {
     layers.push({ kind: 'dense', inFeatures, outFeatures: units, init: initFor(activation) });
     if (activation !== 'linear') layers.push({ kind: activation });
     layers.push({ kind: 'dropout', rate: dropout });
     inFeatures = units;
   }
-  layers.push({ kind: 'dense', inFeatures, outFeatures: 1, init: 'xavier' });
+  layers.push({ kind: 'dense', inFeatures, outFeatures: outputs, init: 'xavier' });
   return { kind: 'sequential', layers };
 }

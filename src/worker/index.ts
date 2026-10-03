@@ -7,3 +7,5 @@ export * from './network';
 export * from './protocol';
 export * from './session';
 export * from './snapshot';
+export * from './mnistSession';
+export * from './mnistSnapshot';

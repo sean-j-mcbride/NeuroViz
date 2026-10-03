@@ -71,6 +71,8 @@ const sameHyperparams = (a: Hyperparams, b: Hyperparams) =>
   JSON.stringify(hyperparamsOf(a)) === JSON.stringify(hyperparamsOf(b));
 
 export interface SessionConfig extends Hyperparams {
+  /** The 2D playground (MNIST sessions say `task: 'mnist'`). */
+  task?: 'toy2d';
   dataset: DatasetSpec;
   network: NetworkSpec;
   /** Seeds weight initialisation, per-epoch shuffling and dropout masks. */
