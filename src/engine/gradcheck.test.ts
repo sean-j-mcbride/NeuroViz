@@ -142,6 +142,35 @@ describe('model gradient checks (end to end)', () => {
   });
 });
 
+describe("dense with inputGrad off (a model's first layer)", () => {
+  it('still gets every parameter gradient right, returns zeros and changes nothing else', () => {
+    const make = () => {
+      const rng = new Rng(8);
+      return new Sequential([
+        new Dense(6, 5, { init: 'xavier', rng }),
+        new Tanh(),
+        new Dense(5, 3, { init: 'xavier', rng }),
+      ]);
+    };
+    const rng = new Rng(3);
+    const x = Tensor.randn([BATCH, 6], rng);
+    const y = oneHot([0, 2, 1, 1, 0], 3);
+    const off = make();
+    (off.layers[0] as Dense).inputGrad = false;
+    const results = checkModel(off, new SoftmaxCrossEntropyLoss(), x, y, MODEL_TOL);
+    assertGradsOk(results.filter((r) => r.name !== 'input'));
+
+    const on = make();
+    const loss = new SoftmaxCrossEntropyLoss();
+    loss.forward(on.forward(x, true), y);
+    on.backward(loss.backward());
+    loss.forward(off.forward(x, true), y);
+    const dx = off.backward(loss.backward());
+    expect(dx.data.every((v) => v === 0)).toBe(true);
+    on.params().forEach((p, i) => expect(off.params()[i]!.grad.data).toEqual(p.grad.data));
+  });
+});
+
 describe('L2 regularisation', () => {
   it('gradient of loss + (λ/2)·Σ‖W‖² matches central differences; biases untouched', () => {
     const rng = new Rng(10);

@@ -88,6 +88,26 @@ export class Tensor {
   }
 }
 
+/**
+ * Backing store for a result whose shape changes now and then (layer outputs
+ * when the batch size changes). It grows to the largest size asked for and
+ * hands out views, so alternating between training batches and evaluation
+ * chunks does not allocate new arrays. A view is only valid until the next
+ * `take`.
+ */
+export class TensorBuffer {
+  private data = new Float32Array(0);
+  private view: Tensor | null = null;
+
+  take(shape: Shape): Tensor {
+    if (this.view && sameShape(this.view.shape, shape)) return this.view;
+    const size = shapeSize(shape);
+    if (this.data.length < size) this.data = new Float32Array(size);
+    this.view = new Tensor(this.data.subarray(0, size), shape);
+    return this.view;
+  }
+}
+
 function sameShape(a: Shape, b: Shape): boolean {
   return a.length === b.length && a.every((d, i) => d === b[i]);
 }
@@ -106,9 +126,40 @@ export interface MatmulOptions {
   transB?: boolean;
 }
 
+/** Float64 accumulators reused across `matmul` calls (grown, never shrunk). */
+let scratch = new Float64Array(0);
+
+function accumulators(n: number): Float64Array {
+  if (scratch.length < n) scratch = new Float64Array(n);
+  return scratch;
+}
+
+/** Whether two arrays share any memory. */
+function overlaps(x: Float32Array, y: Float32Array): boolean {
+  return (
+    x.buffer === y.buffer &&
+    x.byteOffset < y.byteOffset + y.byteLength &&
+    y.byteOffset < x.byteOffset + x.byteLength
+  );
+}
+
+function allFinite(d: Float32Array): boolean {
+  for (let i = 0; i < d.length; i++) if (!Number.isFinite(d[i]!)) return false;
+  return true;
+}
+
 /**
  * op(a) · op(b), where op transposes when the matching flag is set. Transposes
  * are folded into the indexing, so no transposed copies are allocated.
+ *
+ * Every output element is Σ_p op(a)[i,p] · op(b)[p,j], accumulated in float64
+ * over p in ascending order and rounded to float32 once. The kernels below
+ * reorder the loops so the inner loop runs over contiguous memory, but keep
+ * that per-element order, so the result is bitwise identical to the plain
+ * triple loop. Where an a-value is 0 its products are skipped (inputs and
+ * ReLU outputs are often mostly zeros); that only changes anything when b
+ * holds Inf or NaN (0 · Inf = NaN), so it is done only when b is finite.
+ * Small products use the plain loop, which is the reference.
  */
 export function matmul(a: Tensor, b: Tensor, opts: MatmulOptions = {}, out?: Tensor): Tensor {
   const { transA = false, transB = false } = opts;
@@ -124,16 +175,42 @@ export function matmul(a: Tensor, b: Tensor, opts: MatmulOptions = {}, out?: Ten
     );
   }
   const res = target([m, n], out, 'matmul');
-  if (res.data === a.data || res.data === b.data)
+  if (overlaps(res.data, a.data) || overlaps(res.data, b.data))
     throw new Error('matmul: out must not alias an input');
   const A = a.data;
   const B = b.data;
   const C = res.data;
+  if (k * n < SMALL) matmulPlain(A, B, C, m, k, n, transA, transB);
+  else if (!transA && !transB) matmulNN(A, B, C, m, k, n, allFinite(B));
+  else if (transA && !transB) matmulTN(A, B, C, m, k, n, allFinite(B));
+  else if (!transA && transB) matmulNT(A, B, C, m, k, n);
+  else matmulPlain(A, B, C, m, k, n, true, true);
+  return res;
+}
+
+/**
+ * Below this many elements in op(b), the reordered kernels' set-up (the
+ * finiteness scan, clearing and copying the accumulators) costs more than it
+ * saves, so the plain loop is used (the 2D playground's 8-unit layers).
+ */
+const SMALL = 256;
+
+/** The plain triple loop over strided indices; handles every transpose combination. */
+function matmulPlain(
+  A: Float32Array,
+  B: Float32Array,
+  C: Float32Array,
+  m: number,
+  k: number,
+  n: number,
+  transA: boolean,
+  transB: boolean,
+): void {
   // Strides for element (i, p) of op(a) and (p, j) of op(b).
-  const aI = transA ? 1 : ac;
-  const aP = transA ? ac : 1;
-  const bP = transB ? 1 : bc;
-  const bJ = transB ? bc : 1;
+  const aI = transA ? 1 : k;
+  const aP = transA ? m : 1;
+  const bP = transB ? 1 : n;
+  const bJ = transB ? k : 1;
   for (let i = 0; i < m; i++) {
     for (let j = 0; j < n; j++) {
       let s = 0;
@@ -141,7 +218,76 @@ export function matmul(a: Tensor, b: Tensor, opts: MatmulOptions = {}, out?: Ten
       C[i * n + j] = s;
     }
   }
-  return res;
+}
+
+/** C[m,n] = A[m,k] · B[k,n]: one row of float64 accumulators per output row. */
+function matmulNN(
+  A: Float32Array,
+  B: Float32Array,
+  C: Float32Array,
+  m: number,
+  k: number,
+  n: number,
+  skipZeros: boolean,
+): void {
+  const acc = accumulators(n);
+  for (let i = 0; i < m; i++) {
+    acc.fill(0, 0, n);
+    const ao = i * k;
+    for (let p = 0; p < k; p++) {
+      const av = A[ao + p]!;
+      if (av === 0 && skipZeros) continue;
+      const bo = p * n;
+      for (let j = 0; j < n; j++) acc[j]! += av * B[bo + j]!;
+    }
+    const co = i * n;
+    for (let j = 0; j < n; j++) C[co + j] = acc[j]!;
+  }
+}
+
+/** C[m,n] = Aᵀ · B with A [k,m], B [k,n] (e.g. dW = xᵀ·g): all m·n accumulators at once. */
+function matmulTN(
+  A: Float32Array,
+  B: Float32Array,
+  C: Float32Array,
+  m: number,
+  k: number,
+  n: number,
+  skipZeros: boolean,
+): void {
+  const acc = accumulators(m * n);
+  acc.fill(0, 0, m * n);
+  for (let p = 0; p < k; p++) {
+    const ao = p * m;
+    const bo = p * n;
+    for (let i = 0; i < m; i++) {
+      const av = A[ao + i]!;
+      if (av === 0 && skipZeros) continue;
+      const co = i * n;
+      for (let j = 0; j < n; j++) acc[co + j]! += av * B[bo + j]!;
+    }
+  }
+  for (let i = 0; i < m * n; i++) C[i] = acc[i]!;
+}
+
+/** C[m,n] = A · Bᵀ with A [m,k], B [n,k] (e.g. dx = g·Wᵀ): contiguous dot products. */
+function matmulNT(
+  A: Float32Array,
+  B: Float32Array,
+  C: Float32Array,
+  m: number,
+  k: number,
+  n: number,
+): void {
+  for (let i = 0; i < m; i++) {
+    const ao = i * k;
+    for (let j = 0; j < n; j++) {
+      const bo = j * k;
+      let s = 0;
+      for (let p = 0; p < k; p++) s += A[ao + p]! * B[bo + p]!;
+      C[i * n + j] = s;
+    }
+  }
 }
 
 export function transpose(a: Tensor, out?: Tensor): Tensor {

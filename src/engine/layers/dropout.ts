@@ -1,5 +1,5 @@
 import type { Rng } from '../random';
-import { Tensor } from '../tensor';
+import { type Tensor, TensorBuffer } from '../tensor';
 import type { Layer, LayerConfig, Param } from './types';
 
 /**
@@ -18,8 +18,8 @@ export class Dropout implements Layer {
   /** Per element 0 or 1/(1 − rate); null when the last forward was the identity. */
   private mask: Float32Array | null = null;
   private active = false;
-  private out: Tensor | null = null;
-  private dx: Tensor | null = null;
+  private readonly out = new TensorBuffer();
+  private readonly dx = new TensorBuffer();
 
   constructor(rate: number, rng: Rng) {
     this.rate = rate;
@@ -29,13 +29,13 @@ export class Dropout implements Layer {
   forward(x: Tensor, train: boolean): Tensor {
     this.active = train && this.rate > 0;
     if (!this.active) return x;
-    if (this.out?.size !== x.size) this.out = Tensor.zeros(x.shape);
+    const out = this.out.take(x.shape);
     if (!this.freezeMask || this.mask?.length !== x.size) this.sampleMask(x.size);
     const m = this.mask!;
     const xd = x.data;
-    const yd = this.out.data;
+    const yd = out.data;
     for (let i = 0; i < xd.length; i++) yd[i] = xd[i]! * m[i]!;
-    return this.out;
+    return out;
   }
 
   private sampleMask(size: number): void {
@@ -49,11 +49,11 @@ export class Dropout implements Layer {
   backward(gradOut: Tensor): Tensor {
     if (!this.active) return gradOut;
     const m = this.mask!;
-    if (this.dx?.size !== gradOut.size) this.dx = Tensor.zeros(gradOut.shape);
+    const res = this.dx.take(gradOut.shape);
     const g = gradOut.data;
-    const dx = this.dx.data;
+    const dx = res.data;
     for (let i = 0; i < dx.length; i++) dx[i] = g[i]! * m[i]!;
-    return this.dx;
+    return res;
   }
 
   params(): Param[] {

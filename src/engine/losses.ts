@@ -1,4 +1,4 @@
-import { Tensor } from './tensor';
+import { type Tensor, TensorBuffer } from './tensor';
 
 /** A scalar loss averaged over the batch. `backward` returns dLoss/dPred for the last `forward`. */
 export interface Loss {
@@ -22,10 +22,11 @@ function assertSameShape(kind: string, pred: Tensor, target: Tensor): void {
 export class MSELoss implements Loss {
   readonly kind = 'mse';
   private grad: Tensor | null = null;
+  private readonly gradBuf = new TensorBuffer();
 
   forward(pred: Tensor, target: Tensor): number {
     assertSameShape(this.kind, pred, target);
-    if (this.grad?.size !== pred.size) this.grad = Tensor.zeros(pred.shape);
+    this.grad = this.gradBuf.take(pred.shape);
     const n = pred.size;
     const g = this.grad.data;
     let sum = 0;
@@ -52,11 +53,12 @@ export class MSELoss implements Loss {
 export class SoftmaxCrossEntropyLoss implements Loss {
   readonly kind = 'softmax-cross-entropy';
   private grad: Tensor | null = null;
+  private readonly gradBuf = new TensorBuffer();
 
   forward(pred: Tensor, target: Tensor): number {
     assertSameShape(this.kind, pred, target);
     const [n, c] = [pred.rows, pred.cols];
-    if (this.grad?.size !== pred.size) this.grad = Tensor.zeros(pred.shape);
+    this.grad = this.gradBuf.take(pred.shape);
     const z = pred.data;
     const y = target.data;
     const g = this.grad.data;
@@ -92,10 +94,11 @@ export class SoftmaxCrossEntropyLoss implements Loss {
 export class BCEWithLogitsLoss implements Loss {
   readonly kind = 'bce-with-logits';
   private grad: Tensor | null = null;
+  private readonly gradBuf = new TensorBuffer();
 
   forward(pred: Tensor, target: Tensor): number {
     assertSameShape(this.kind, pred, target);
-    if (this.grad?.size !== pred.size) this.grad = Tensor.zeros(pred.shape);
+    this.grad = this.gradBuf.take(pred.shape);
     const n = pred.size;
     const z = pred.data;
     const y = target.data;

@@ -1,6 +1,6 @@
 import { heNormal, xavierNormal } from '../init';
 import type { Rng } from '../random';
-import { Tensor, add, matmul, sumAxis } from '../tensor';
+import { Tensor, TensorBuffer, add, matmul, sumAxis } from '../tensor';
 import type { InitKind, Layer, LayerConfig, Param } from './types';
 
 export interface DenseOptions {
@@ -13,10 +13,17 @@ export class Dense implements Layer {
   readonly kind = 'dense';
   readonly W: Param;
   readonly b: Param;
+  /**
+   * Whether `backward` computes the gradient with respect to the input. The
+   * first layer of a model can turn it off: nothing reads it, and for 784
+   * inputs it is a third of the layer's backward cost. Parameter gradients are
+   * computed either way; with it off, `backward` returns zeros.
+   */
+  inputGrad = true;
   private readonly init: InitKind;
   private x: Tensor | null = null;
-  private out: Tensor | null = null;
-  private dx: Tensor | null = null;
+  private readonly out = new TensorBuffer();
+  private readonly dx = new TensorBuffer();
 
   constructor(
     readonly inFeatures: number,
@@ -37,9 +44,9 @@ export class Dense implements Layer {
       throw new Error(`Dense: expected ${this.inFeatures} input features, got ${x.cols}`);
     }
     this.x = x;
-    if (this.out?.rows !== x.rows) this.out = Tensor.zeros([x.rows, this.outFeatures]);
-    matmul(x, this.W.value, {}, this.out);
-    return add(this.out, this.b.value, this.out);
+    const out = this.out.take([x.rows, this.outFeatures]);
+    matmul(x, this.W.value, {}, out);
+    return add(out, this.b.value, out);
   }
 
   backward(gradOut: Tensor): Tensor {
@@ -47,8 +54,12 @@ export class Dense implements Layer {
     if (!x) throw new Error('Dense: backward called before forward');
     matmul(x, gradOut, { transA: true }, this.W.grad); // dW = xᵀ·g
     sumAxis(gradOut, 0, this.b.grad); // db = Σ_rows g
-    if (this.dx?.rows !== x.rows) this.dx = Tensor.zeros(x.shape);
-    return matmul(gradOut, this.W.value, { transB: true }, this.dx); // dx = g·Wᵀ
+    const dx = this.dx.take(x.shape);
+    if (!this.inputGrad) {
+      dx.data.fill(0);
+      return dx;
+    }
+    return matmul(gradOut, this.W.value, { transB: true }, dx); // dx = g·Wᵀ
   }
 
   params(): Param[] {

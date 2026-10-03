@@ -1,4 +1,4 @@
-import { Tensor } from '../tensor';
+import { type Tensor, TensorBuffer } from '../tensor';
 import type { Layer, LayerConfig, Param } from './types';
 
 /** Base for parameter-free elementwise activations y = f(x). */
@@ -6,7 +6,8 @@ abstract class Activation implements Layer {
   abstract readonly kind: 'relu' | 'tanh' | 'sigmoid';
   private x: Tensor | null = null;
   private out: Tensor | null = null;
-  private dx: Tensor | null = null;
+  private readonly outBuf = new TensorBuffer();
+  private readonly dxBuf = new TensorBuffer();
 
   protected abstract f(x: number): number;
   /** f′ expressed in terms of the input x and the output y = f(x). */
@@ -14,7 +15,7 @@ abstract class Activation implements Layer {
 
   forward(x: Tensor, _train: boolean): Tensor {
     this.x = x;
-    if (this.out?.size !== x.size) this.out = Tensor.zeros(x.shape);
+    this.out = this.outBuf.take(x.shape);
     const xd = x.data;
     const yd = this.out.data;
     for (let i = 0; i < xd.length; i++) yd[i] = this.f(xd[i]!);
@@ -24,13 +25,13 @@ abstract class Activation implements Layer {
   backward(gradOut: Tensor): Tensor {
     const { x, out } = this;
     if (!x || !out) throw new Error(`${this.kind}: backward called before forward`);
-    if (this.dx?.size !== x.size) this.dx = Tensor.zeros(x.shape);
+    const res = this.dxBuf.take(x.shape);
     const g = gradOut.data;
     const xd = x.data;
     const yd = out.data;
-    const dx = this.dx.data;
+    const dx = res.data;
     for (let i = 0; i < dx.length; i++) dx[i] = g[i]! * this.df(xd[i]!, yd[i]!);
-    return this.dx;
+    return res;
   }
 
   params(): Param[] {
