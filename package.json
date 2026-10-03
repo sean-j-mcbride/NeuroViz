@@ -14,7 +14,8 @@
     "test:watch": "vitest",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.engine.json --noEmit",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "data:mnist": "node scripts/build-mnist.ts"
   },
   "dependencies": {
     "react": "^19.3.0",

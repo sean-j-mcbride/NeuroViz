@@ -32,6 +32,10 @@ export default tseslint.config(
     },
   },
   {
+    files: ['scripts/**/*.ts'],
+    languageOptions: { globals: globals.node },
+  },
+  {
     files: ['src/engine/**/*.ts', 'src/data/**/*.ts', 'src/worker/**/*.ts'],
     rules: { 'no-restricted-imports': ['error', engineBoundary] },
   },
