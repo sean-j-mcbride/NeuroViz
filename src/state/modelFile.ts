@@ -89,27 +89,32 @@ function encodeCounts(hist: Float32Array, size: number, width: UintWidth): strin
   );
 }
 
+/** A histogram timeline as the files store it: whole counts per bin, RMS as float32, base64. */
+export function timelineBlock(timeline: TimelineState, raw: (a: Float32Array) => string) {
+  return {
+    interval: timeline.interval,
+    epochs: raw(timeline.epochs),
+    layers: timeline.layers.map((l) => {
+      const bytes = uintWidthFor(l.size);
+      return {
+        size: l.size,
+        bytes,
+        weightCounts: encodeCounts(l.weightHist, l.size, bytes),
+        gradCounts: encodeCounts(l.gradHist, l.size, bytes),
+        weightRms: float32ToBase64(l.weightRms),
+        gradRms: float32ToBase64(l.gradRms),
+      };
+    }),
+  };
+}
+
 function historyBlock(
   { timeline, params }: NonNullable<Checkpoint['observations']>,
   raw: (a: Float32Array) => string,
 ) {
   return {
     note: HISTORY_NOTE,
-    timeline: {
-      interval: timeline.interval,
-      epochs: raw(timeline.epochs),
-      layers: timeline.layers.map((l) => {
-        const bytes = uintWidthFor(l.size);
-        return {
-          size: l.size,
-          bytes,
-          weightCounts: encodeCounts(l.weightHist, l.size, bytes),
-          gradCounts: encodeCounts(l.gradHist, l.size, bytes),
-          weightRms: float32ToBase64(l.weightRms),
-          gradRms: float32ToBase64(l.gradRms),
-        };
-      }),
-    },
+    timeline: timelineBlock(timeline, raw),
     params: {
       head: params.head,
       length: params.length,
@@ -277,30 +282,29 @@ function sharesFrom(counts: Uint32Array, size: number, path: string): Float32Arr
   return out;
 }
 
-function history(v: unknown): Checkpoint['observations'] {
-  if (v === null) return null;
-  const h = record(v, 'checkpoint.history');
-  const t = record(h.timeline, 'checkpoint.history.timeline');
-  if (!Array.isArray(t.layers)) fail('checkpoint.history.timeline.layers must be a list');
-  const timeline: TimelineState = {
-    interval: int(t.interval, 'checkpoint.history.timeline.interval'),
-    epochs: floats(t.epochs, 'checkpoint.history.timeline.epochs'),
+/** Reads what `timelineBlock` wrote, at `path` (for messages). */
+export function parseTimeline(v: unknown, path: string): TimelineState {
+  const t = record(v, path);
+  if (!Array.isArray(t.layers)) fail(`${path}.layers must be a list`);
+  return {
+    interval: int(t.interval, `${path}.interval`),
+    epochs: floats(t.epochs, `${path}.epochs`),
     layers: (t.layers as unknown[]).map((raw, k) => {
-      const path = `checkpoint.history.timeline.layers[${k}]`;
-      const l = record(raw, path);
-      const size = int(l.size, `${path}.size`);
+      const lp = `${path}.layers[${k}]`;
+      const l = record(raw, lp);
+      const size = int(l.size, `${lp}.size`);
       const bytes =
         l.bytes === 1 || l.bytes === 2 || l.bytes === 4
           ? l.bytes
-          : fail(`${path}.bytes must be 1, 2 or 4`);
+          : fail(`${lp}.bytes must be 1, 2 or 4`);
       const counts = (key: string) =>
         sharesFrom(
-          decoded(() => base64ToUints(str(l[key], `${path}.${key}`), bytes), `${path}.${key}`),
+          decoded(() => base64ToUints(str(l[key], `${lp}.${key}`), bytes), `${lp}.${key}`),
           size,
-          `${path}.${key}`,
+          `${lp}.${key}`,
         );
       const f32 = (key: string) =>
-        decoded(() => base64ToFloat32(str(l[key], `${path}.${key}`)), `${path}.${key}`);
+        decoded(() => base64ToFloat32(str(l[key], `${lp}.${key}`)), `${lp}.${key}`);
       return {
         size,
         weightHist: counts('weightCounts'),
@@ -310,6 +314,12 @@ function history(v: unknown): Checkpoint['observations'] {
       };
     }),
   };
+}
+
+function history(v: unknown): Checkpoint['observations'] {
+  if (v === null) return null;
+  const h = record(v, 'checkpoint.history');
+  const timeline = parseTimeline(h.timeline, 'checkpoint.history.timeline');
   const p = record(h.params, 'checkpoint.history.params');
   const params: ParamHistoryState = {
     head: int(p.head, 'checkpoint.history.params.head'),

@@ -51,6 +51,8 @@ export interface ClientOptions {
   probe?(): ProbeRef | null | undefined;
   /** MNIST: the drawn digit to classify, read when each request is sent. */
   drawn?(): Float32Array | null | undefined;
+  /** MNIST: the class the drawn digit's gradients are for (null: the network's answer). */
+  gradTarget?(): number | null | undefined;
   intervalMs?: number;
 }
 
@@ -148,11 +150,13 @@ export class TrainingClient<T extends TaskTypes = PlaygroundTask> {
     const probe = this.options.probe?.();
     // A copy: the caller keeps its drawing, and the message may be transferred.
     const drawn = this.options.drawn?.()?.slice();
+    const gradTarget = drawn ? this.options.gradTarget?.() : null;
     this.post({
       type: 'snapshot',
       requestId: ++this.requestId,
       ...(probe && { probe }),
       ...(drawn && { drawn }),
+      ...(gradTarget != null && { gradTarget }),
     });
   }
 

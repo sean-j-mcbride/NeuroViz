@@ -127,8 +127,10 @@ describe('MNIST model files', () => {
     const straight = advance(new MnistSession(toMnistSessionConfig(config, data)), 200);
     const text = saved(config, 170);
     const doc = JSON.parse(text);
-    expect(doc.version).toBe(2);
+    expect(doc.version).toBe(3);
     expect(doc.config.network.conv).toEqual(config.network.conv);
+    // The gradient charts: one layer per conv/dense layer (conv, dense 16, output).
+    expect(doc.checkpoint.history.timeline.layers).toHaveLength(3);
     const file = parseMnistModelFile(text, data);
     expect(file.config).toEqual(config);
     const resumed = advance(
@@ -138,9 +140,21 @@ describe('MNIST model files', () => {
     expect(resumed.checkpoint()).toEqual(straight.checkpoint());
   }, 30_000);
 
+  it('version 2 files (no charts history) load; the charts restart there', () => {
+    const v2 = edited(saved(SMALL, 20), (d) => {
+      d.version = 2;
+      delete (d.checkpoint as { history?: unknown }).history;
+    });
+    const file = parseMnistModelFile(v2, data);
+    expect(file.checkpoint.timeline).toBeUndefined();
+    const s = new MnistSession(toMnistSessionConfig(file.config, data, file.checkpoint));
+    expect(s.snapshot().timeline.epochs).toHaveLength(0);
+  });
+
   it('version 1 files (Phase 5, no conv rows) still load, as MLPs', () => {
     const v1 = edited(saved(SMALL, 20), (d) => {
       d.version = 1;
+      delete (d.checkpoint as { history?: unknown }).history;
       delete d.config.network.conv;
     });
     expect(parseMnistModelFile(v1, data).config.network).toEqual(SMALL.network);

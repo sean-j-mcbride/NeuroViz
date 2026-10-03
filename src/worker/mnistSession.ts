@@ -11,6 +11,7 @@ import {
   exportParams,
   importParams,
   layerFromConfig,
+  ReLU,
   makeOptimiser,
   reshape,
 } from '../engine';
@@ -25,9 +26,11 @@ import {
   range,
   shuffleInPlace,
 } from '../data';
+import { HistogramTimeline } from './history';
 import { LossHistory } from './lossHistory';
 import type {
   ConvFilters,
+  DeadFlags,
   FirstLayerWeights,
   FeatureMap,
   MnistCheckpoint,
@@ -63,6 +66,26 @@ export const TRAIN_EVAL_SIZE = 1000;
 const EVAL_CHUNK = 500;
 /** The train-evaluation subset is the same for every run, so curves are comparable. */
 const TRAIN_EVAL_SEED = 0;
+/**
+ * Gradient histograms, gradient RMS and dead flags are measured at every
+ * record over this many training images (the first of the train-evaluation
+ * subset), in chunks of GRAD_CHUNK.
+ */
+export const GRAD_EVAL_SIZE = 500;
+const GRAD_CHUNK = 250;
+
+/** Names of the parameterised layers: "Conv 1", "Dense 1", "Output"; or "Input → H1" for an MLP. */
+function layerNamesFor({ conv, hidden }: MnistNetworkSpec): string[] {
+  if (conv.length === 0) {
+    const n = hidden.length + 1;
+    return Array.from({ length: n }, (_, k) => {
+      const from = k === 0 ? 'Input' : `H${k}`;
+      return `${from} → ${k === n - 1 ? 'Output' : `H${k + 1}`}`;
+    });
+  }
+  const convs = conv.filter((r) => r.kind === 'conv').map((_, i) => `Conv ${i + 1}`);
+  return [...convs, ...hidden.map((_, i) => `Dense ${i + 1}`), 'Output'];
+}
 
 /**
  * One MNIST training run: an MLP (784 inputs) or a CNN (a 1 × 28 × 28 image)
@@ -90,6 +113,15 @@ export class MnistSession {
   /** CNNs: the `conv` row of each Conv2D layer. */
   private readonly convRows: number[];
   private readonly network: MnistNetworkSpec;
+  /** Conv and dense layers in order: what the timeline, layer names and dead flags index. */
+  private readonly paramLayers: (Dense | Conv2D)[];
+  /** For each ReLU layer (by index in the model), the param layer it follows. */
+  private readonly reluOwners: Map<number, number>;
+  private readonly timeline: HistogramTimeline;
+  private dead: DeadFlags[] = [];
+  private readonly gradEval: Uint32Array;
+  /** Float64 sums of each param layer's ∂L/∂W over the gradient subset's chunks. */
+  private readonly gradSums: Float64Array[];
   private readonly shuffleRng: Rng;
   private readonly initRng: Rng;
   private readonly order: Uint32Array;
@@ -130,6 +162,17 @@ export class MnistSession {
     this.firstHiddenEnd = end;
     this.mapEnds = convRowEnds(network.conv);
     this.convRows = network.conv.flatMap((row, i) => (row.kind === 'conv' ? [i] : []));
+    this.paramLayers = model.layers.filter(
+      (l): l is Dense | Conv2D => l instanceof Dense || l instanceof Conv2D,
+    );
+    this.reluOwners = new Map();
+    let lastParam = -1;
+    model.layers.forEach((l, i) => {
+      if (l instanceof Dense || l instanceof Conv2D) lastParam++;
+      else if (l instanceof ReLU) this.reluOwners.set(i, lastParam);
+    });
+    this.timeline = new HistogramTimeline(this.paramLayers.length);
+    this.gradSums = this.paramLayers.map((l) => new Float64Array(l.W.value.size));
 
     this.trainer = new Trainer({
       model,
@@ -142,6 +185,7 @@ export class MnistSession {
     this.order = range(n);
     const evalCount = Math.min(TRAIN_EVAL_SIZE, n);
     this.trainEval = shuffleInPlace(range(n), new Rng(TRAIN_EVAL_SEED)).slice(0, evalCount);
+    this.gradEval = this.trainEval.slice(0, Math.min(GRAD_EVAL_SIZE, evalCount));
     this.testAll = range(mnistCount(this.test));
     this.batchSize = this.resolveBatchSize(config.batchSize);
     this.evaluation = {
@@ -239,10 +283,69 @@ export class MnistSession {
       this.losses.push(Math.fround(tr.loss), Math.fround(te.loss));
       this.errors.push(Math.fround(1 - tr.accuracy), Math.fround(1 - te.accuracy));
     } while (this.examples >= this.losses.count * RECORD_EVERY);
+    const index = this.losses.count - 1;
+    if (this.timeline.due(index)) {
+      const gradW = this.measureGradients();
+      this.timeline.record(
+        index,
+        this.paramLayers.map((l, k) => ({ W: l.W.value.data, gradW: gradW[k]! })),
+      );
+    }
   }
 
-  /** The network's output for one 28×28 input in [0, 1]. Evaluation mode. */
-  predict(pixels: Float32Array): MnistPrediction {
+  /**
+   * The gradient of (mean data loss + L2 penalty) over the gradient subset, in
+   * evaluation mode, per parameterised layer's W; also sets the dead flags.
+   * Observation only: it overwrites the params' `grad`, which the next
+   * training step overwrites before the optimiser reads it, and draws no
+   * randomness.
+   */
+  private measureGradients(): Float32Array[] {
+    const total = this.gradEval.length;
+    for (const sum of this.gradSums) sum.fill(0);
+    const alive = new Map<number, Uint8Array>();
+    for (let start = 0; start < total; start += GRAD_CHUNK) {
+      const rows = Math.min(GRAD_CHUNK, total - start);
+      const x = gatherImages(this.train, this.gradEval, start, this.x.take([rows, MNIST_PIXELS]));
+      const y = oneHotInto(
+        this.train.labels,
+        this.gradEval,
+        start,
+        this.y.take([rows, MNIST_CLASSES]),
+      );
+      let h = this.input(x);
+      this.model.layers.forEach((layer, i) => {
+        h = layer.forward(h, false);
+        if (layer instanceof ReLU) markAlive(h, alive, i);
+      });
+      this.evalLoss.forward(h, y);
+      this.model.backward(this.evalLoss.backward());
+      // The subset's mean gradient is the chunks' mean gradients weighted by their size.
+      const weight = rows / total;
+      this.paramLayers.forEach((l, k) => {
+        const g = l.W.grad.data;
+        const sum = this.gradSums[k]!;
+        for (let i = 0; i < g.length; i++) sum[i]! += g[i]! * weight;
+      });
+    }
+    const l2 = this.trainer.l2;
+    this.dead = [...alive].flatMap(([i, live]) => {
+      const flags = live.map((v) => 1 - v);
+      return flags.some((f) => f === 1) ? [{ layer: this.reluOwners.get(i)!, flags }] : [];
+    });
+    return this.paramLayers.map((l, k) => {
+      const w = l.W.value.data;
+      const sum = this.gradSums[k]!;
+      return Float32Array.from(sum, (g, i) => g + l2 * w[i]!);
+    });
+  }
+
+  /**
+   * The network's output for one 28×28 input in [0, 1], in evaluation mode.
+   * For a CNN also each row's feature map and, for the loss against `target`
+   * (default: the network's answer), the gradient of each map and of the input.
+   */
+  predict(pixels: Float32Array, target?: number): MnistPrediction {
     if (pixels.length !== MNIST_PIXELS) {
       throw new Error(`predict: expected ${MNIST_PIXELS} pixels, got ${pixels.length}`);
     }
@@ -265,17 +368,53 @@ export class MnistSession {
     let sum = 0;
     for (let c = 0; c < MNIST_CLASSES; c++) sum += Math.exp(z[c]! - max);
     for (let c = 0; c < MNIST_CLASSES; c++) probs[c] = Math.exp(z[c]! - max) / sum;
-    return { probs, ...(hidden && { hidden }), ...(maps.length > 0 && { maps }) };
+    if (!this.cnn) return { probs, ...(hidden && { hidden }) };
+    return { probs, maps, ...this.gradientsFor(h, probs, target) };
+  }
+
+  /**
+   * Backward from the cross-entropy against `target` through the forward pass
+   * `predict` just made, keeping ∂L/∂ each row's output and ∂L/∂ the input.
+   */
+  private gradientsFor(
+    logits: Tensor,
+    probs: Float32Array,
+    target: number | undefined,
+  ): Pick<MnistPrediction, 'target' | 'gradMaps' | 'inputGrad'> {
+    const cls =
+      target !== undefined && Number.isInteger(target) && target >= 0 && target < MNIST_CLASSES
+        ? target
+        : probs.indexOf(Math.max(...probs));
+    const y = Tensor.zeros([1, MNIST_CLASSES]);
+    y.data[cls] = 1;
+    this.evalLoss.forward(logits, y);
+    const first = this.paramLayers[0]!;
+    first.inputGrad = true;
+    const gradMaps: FeatureMap[] = [];
+    let g = this.evalLoss.backward();
+    try {
+      for (let i = this.model.layers.length - 1; i >= 0; i--) {
+        g = this.model.layers[i]!.backward(g); // now ∂L/∂(output of layer i − 1)
+        const row = this.mapEnds.indexOf(i - 1);
+        if (row >= 0) {
+          const [, c, h, w] = g.shape as [number, number, number, number];
+          gradMaps.unshift({ row, shape: [c, h, w], data: g.data.slice() });
+        }
+      }
+    } finally {
+      first.inputGrad = false;
+    }
+    return { target: cls, gradMaps, inputGrad: g.data.slice() };
   }
 
   data(): MnistSessionData {
     return { task: 'mnist', trainSize: mnistCount(this.train), testSize: mnistCount(this.test) };
   }
 
-  snapshot(opts: { drawn?: Float32Array } = {}): MnistSnapshot {
+  snapshot(opts: { drawn?: Float32Array; gradTarget?: number } = {}): MnistSnapshot {
     const losses = this.losses.snapshot();
     const errors = this.errors.snapshot();
-    const prediction = opts.drawn && this.predict(opts.drawn);
+    const prediction = opts.drawn && this.predict(opts.drawn, opts.gradTarget);
     return {
       task: 'mnist',
       network: copyMnistNetwork(this.network),
@@ -291,8 +430,16 @@ export class MnistSession {
       testAccuracy: 1 - errors.test.latest,
       ...(this.cnn ? { filters: this.filters() } : { firstLayer: this.firstLayer() }),
       evaluation: this.evaluationCopy(),
+      timeline: this.timeline.snapshot(),
+      layerNames: layerNamesFor(this.network),
+      dead: this.deadCopy(),
+      gradEvalSize: this.gradEval.length,
       ...(prediction && { prediction }),
     };
+  }
+
+  private deadCopy(): DeadFlags[] {
+    return this.dead.map((d) => ({ layer: d.layer, flags: d.flags.slice() }));
   }
 
   private firstLayer(): FirstLayerWeights {
@@ -338,6 +485,8 @@ export class MnistSession {
       optimiser: this.trainer.optimiser.saveState(this.model.params()),
       rng: { shuffle: this.shuffleRng.getState(), dropout: this.initRng.getState() },
       evaluation: this.evaluationCopy(),
+      timeline: this.timeline.exportState(),
+      dead: this.deadCopy(),
     };
   }
 
@@ -380,5 +529,40 @@ export class MnistSession {
     this.errors.importState(c.errors);
     this.evaluation.predicted.set(c.evaluation.predicted);
     this.evaluation.confidence.set(c.evaluation.confidence);
+    // Files from before the charts' history was saved: the charts restart here.
+    if (c.timeline) this.timeline.importState(c.timeline);
+    if (c.dead) {
+      for (const d of c.dead) {
+        const l = this.paramLayers[d.layer];
+        const units = l instanceof Conv2D ? l.outChannels : l?.outFeatures;
+        if (units !== d.flags.length)
+          throw new Error('Checkpoint dead flags do not fit this network');
+      }
+      this.dead = c.dead.map((d) => ({ layer: d.layer, flags: d.flags.slice() }));
+    }
+  }
+}
+
+/**
+ * Marks which units (dense) or channels (conv) of a ReLU output are non-zero
+ * for at least one row; `alive` keeps, per ReLU layer index, 1 for alive.
+ */
+function markAlive(h: Tensor, alive: Map<number, Uint8Array>, layer: number): void {
+  const [rows, units] = h.shape as [number, number];
+  const area = h.size / (rows * units);
+  let live = alive.get(layer);
+  if (!live) alive.set(layer, (live = new Uint8Array(units)));
+  const d = h.data;
+  for (let r = 0; r < rows; r++) {
+    for (let u = 0; u < units; u++) {
+      if (live[u]) continue;
+      const o = (r * units + u) * area;
+      for (let p = 0; p < area; p++) {
+        if (d[o + p] !== 0) {
+          live[u] = 1;
+          break;
+        }
+      }
+    }
   }
 }

@@ -1,6 +1,6 @@
 import { MNIST_SUBSET_ID, type MnistSubset } from '../data';
 import type { OptimiserState } from '../engine';
-import { type MnistCheckpoint, MnistSession } from '../worker';
+import { type DeadFlags, type MnistCheckpoint, MnistSession } from '../worker';
 import {
   base64ToFloat32,
   base64ToUints,
@@ -21,8 +21,10 @@ import {
   lossesBlock,
   mapValues,
   record,
+  parseTimeline,
   rngState,
   str,
+  timelineBlock,
 } from './modelFile';
 
 /*
@@ -36,8 +38,10 @@ export { MNIST_MODEL_FILE_FORMAT };
 /**
  * 2 (Phase 6): the network gained `conv` rows. Version 1 files (MLPs, no
  * `conv`) still load; settings without `conv` are read as an MLP.
+ * 3: `checkpoint.history` keeps the gradient charts and dead flags. Earlier
+ * files load with the charts starting at the loaded record.
  */
-export const MNIST_MODEL_FILE_VERSION = 2;
+export const MNIST_MODEL_FILE_VERSION = 3;
 
 export interface MnistModelFile {
   config: MnistConfig;
@@ -85,10 +89,21 @@ export function serialiseMnistModelFile(
         predicted: uintsToBase64(c.evaluation.predicted, 1),
         confidence: float32ToBase64(c.evaluation.confidence),
       },
+      ...(c.timeline && {
+        history: {
+          note: HISTORY_NOTE,
+          timeline: timelineBlock(c.timeline, raw),
+          dead: (c.dead ?? []).map((d) => ({ layer: d.layer, flags: uintsToBase64(d.flags, 1) })),
+        },
+      }),
     },
   };
   return `${JSON.stringify(doc, null, 2).replace(/"@@(\d+)@@"/g, (_, i: string) => arrays[Number(i)]!)}\n`;
 }
+
+const HISTORY_NOTE =
+  'Display only: the gradient charts (one column per record; histograms as whole counts per ' +
+  'bin) and the dead-unit flags, so they carry on after loading.';
 
 const f32 = (v: unknown, path: string) => decoded(() => base64ToFloat32(str(v, path)), path);
 
@@ -108,8 +123,24 @@ function optimiserState(v: unknown, path: string): OptimiserState {
   };
 }
 
-function checkpoint(v: unknown): MnistCheckpoint {
+function dead(v: unknown): DeadFlags[] {
+  if (!Array.isArray(v)) return fail('checkpoint.history.dead must be a list');
+  return v.map((d, k) => {
+    const path = `checkpoint.history.dead[${k}]`;
+    const r = record(d, path);
+    return {
+      layer: int(r.layer, `${path}.layer`),
+      flags: Uint8Array.from(
+        decoded(() => base64ToUints(str(r.flags, `${path}.flags`), 1), `${path}.flags`),
+      ),
+    };
+  });
+}
+
+function checkpoint(v: unknown, version: number): MnistCheckpoint {
   const c = record(v, 'checkpoint');
+  const h =
+    version >= 3 && c.history !== undefined ? record(c.history, 'checkpoint.history') : null;
   const rng = record(c.rng, 'checkpoint.rng');
   const e = record(c.evaluation, 'checkpoint.evaluation');
   const bytes = c.orderBytes;
@@ -145,6 +176,10 @@ function checkpoint(v: unknown): MnistCheckpoint {
       ),
       confidence: f32(e.confidence, 'checkpoint.evaluation.confidence'),
     },
+    ...(h && {
+      timeline: parseTimeline(h.timeline, 'checkpoint.history.timeline'),
+      dead: dead(h.dead),
+    }),
   };
 }
 
@@ -172,7 +207,7 @@ export function parseMnistModelFile(text: string, data: MnistSubset): MnistModel
         `this version reads format ${MNIST_MODEL_FILE_VERSION}.`,
     );
   }
-  if (d.version !== 1 && d.version !== MNIST_MODEL_FILE_VERSION)
+  if (d.version !== 1 && d.version !== 2 && d.version !== MNIST_MODEL_FILE_VERSION)
     fail('The file’s format version is missing or invalid.');
 
   const ds = record(d.dataset, 'dataset');
@@ -186,7 +221,7 @@ export function parseMnistModelFile(text: string, data: MnistSubset): MnistModel
   if ('error' in parsed) return fail(`The saved settings are invalid: ${parsed.error}.`);
   const { config } = parsed;
 
-  const c = checkpoint(d.checkpoint);
+  const c = checkpoint(d.checkpoint, d.version as number);
   try {
     new MnistSession(toMnistSessionConfig(config, data, c));
   } catch (e) {

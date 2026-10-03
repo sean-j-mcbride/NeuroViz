@@ -1,4 +1,5 @@
 import type { OptimiserState, Padding, ParamValues, RngState } from '../engine';
+import type { TimelineSnapshot, TimelineState } from './history';
 import type { LossHistorySnapshot, LossHistoryState } from './lossHistory';
 import type { MnistNetworkSpec } from './network';
 
@@ -26,6 +27,26 @@ export interface MnistPrediction {
   hidden?: Float32Array;
   /** CNNs: every conv and pool row's output. */
   maps?: FeatureMap[];
+  /**
+   * CNNs: the class the gradients below are for (the requested one, or the
+   * network's answer). L is the cross-entropy loss of this one input against it.
+   */
+  target?: number;
+  /** CNNs: ∂L/∂(each row's output), the same shapes as `maps`. */
+  gradMaps?: FeatureMap[];
+  /** CNNs: ∂L/∂(input pixels), 784 values. */
+  inputGrad?: Float32Array;
+}
+
+/**
+ * ReLU units that output 0 for every image of the gradient subset ("dead"):
+ * a dense layer's units, or a conv layer's channels. `layer` indexes the
+ * parameterised layers (as in `layerNames` and the timeline).
+ */
+export interface DeadFlags {
+  layer: number;
+  /** 1 = dead, per unit or channel. */
+  flags: Uint8Array;
 }
 
 /** A dense layer's weights `[inFeatures, outFeatures]` and biases. */
@@ -91,6 +112,19 @@ export interface MnistSnapshot {
   filters?: ConvFilters[];
   /** At the latest record. */
   evaluation: MnistEvaluation;
+  /**
+   * Weight and gradient histograms and gradient RMS per parameterised layer
+   * (conv and dense, in order), one column per record: its `epochs` are
+   * record indices. Gradients are of the mean loss (plus L2) over the
+   * gradient subset.
+   */
+  timeline: TimelineSnapshot;
+  /** One name per parameterised layer: "Conv 1", "Dense 1", "Output" or "Input → H1"-style. */
+  layerNames: string[];
+  /** Dead ReLU units or channels at the latest record (layers with none dead are left out). */
+  dead: DeadFlags[];
+  /** Images in the fixed gradient subset (from the training set). */
+  gradEvalSize: number;
   /** Present when the snapshot was requested with a drawn digit. */
   prediction?: MnistPrediction;
 }
@@ -123,6 +157,9 @@ export interface MnistCheckpoint {
   rng: { shuffle: RngState; dropout: RngState };
   /** The latest test-set evaluation, so the confusion matrix and gallery carry on unchanged. */
   evaluation: MnistEvaluation;
+  /** The charts' history and dead flags (absent in files saved before they existed: they restart). */
+  timeline?: TimelineState;
+  dead?: DeadFlags[];
 }
 
 export function isMnistSnapshot<T extends object>(s: T | MnistSnapshot): s is MnistSnapshot {
@@ -148,11 +185,15 @@ export function mnistSnapshotBuffers(s: MnistSnapshot): ArrayBuffer[] {
     s.evaluation.confidence,
   ];
   if (s.firstLayer) arrays.push(s.firstLayer.W, s.firstLayer.b);
+  arrays.push(...timelineArrays(s.timeline), ...s.dead.map((d) => d.flags));
   for (const f of s.filters ?? []) arrays.push(f.W, f.b);
   if (s.prediction) {
     arrays.push(s.prediction.probs);
     if (s.prediction.hidden) arrays.push(s.prediction.hidden);
-    for (const m of s.prediction.maps ?? []) arrays.push(m.data);
+    for (const m of [...(s.prediction.maps ?? []), ...(s.prediction.gradMaps ?? [])]) {
+      arrays.push(m.data);
+    }
+    if (s.prediction.inputGrad) arrays.push(s.prediction.inputGrad);
   }
   return [...new Set(arrays.map((a) => a.buffer as ArrayBuffer))];
 }
@@ -165,6 +206,12 @@ export function mnistCheckpointBuffers(c: MnistCheckpoint): ArrayBuffer[] {
     ...Object.values(c.optimiser.slots).flat(),
     c.evaluation.predicted,
     c.evaluation.confidence,
+    ...(c.timeline ? timelineArrays(c.timeline) : []),
+    ...(c.dead ?? []).map((d) => d.flags),
   ];
   return [...new Set(arrays.map((a) => a.buffer as ArrayBuffer))];
+}
+
+function timelineArrays(t: TimelineSnapshot | TimelineState): Float32Array[] {
+  return [t.epochs, ...t.layers.flatMap((l) => [l.weightHist, l.gradHist, l.weightRms, l.gradRms])];
 }

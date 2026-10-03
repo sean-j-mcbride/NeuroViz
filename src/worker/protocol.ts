@@ -25,9 +25,16 @@ export type ToWorker =
   | { type: 'step' }
   /**
    * Ask for a snapshot; the UI sends one at a time, which throttles the flow.
-   * `probe` (playground) traces a data point; `drawn` (MNIST) is a 28×28 input to classify.
+   * `probe` (playground) traces a data point; `drawn` (MNIST) is a 28×28 input to classify,
+   * and `gradTarget` the class its gradient maps are for (default: the network's answer).
    */
-  | { type: 'snapshot'; requestId: number; probe?: ProbeRef; drawn?: Float32Array }
+  | {
+      type: 'snapshot';
+      requestId: number;
+      probe?: ProbeRef;
+      drawn?: Float32Array;
+      gradTarget?: number;
+    }
   /** Ask for everything needed to save the run and resume it exactly. */
   | { type: 'checkpoint'; requestId: number };
 

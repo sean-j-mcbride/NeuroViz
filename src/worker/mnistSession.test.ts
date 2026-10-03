@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadMnistSubset } from '../test/mnist';
+import { Rng, compareGrads } from '../engine';
+import { range, shuffleInPlace } from '../data';
 import { type Post, TrainingController } from './controller';
 import {
   MnistSession,
@@ -340,7 +342,7 @@ describe('MnistSession with a CNN', () => {
     const watched = new MnistSession(cfg);
     for (let i = 0; i < 30; i++) {
       watched.advance();
-      if (i % 7 === 0) watched.snapshot({ drawn: testImage(i) });
+      if (i % 7 === 0) watched.snapshot({ drawn: testImage(i), gradTarget: i % 10 });
     }
     expect(sameParams(plain, watched)).toBe(true);
 
@@ -385,7 +387,10 @@ describe('MnistSession with a CNN', () => {
       const saved: MnistCheckpoint = structuredClone(first.checkpoint());
       const resumed = advance(new MnistSession({ ...cfg, resume: saved }), 80);
       expect(sameParams(straight, resumed)).toBe(true);
-      expect(resumed.snapshot().evaluation).toEqual(straight.snapshot().evaluation);
+      const [a, b] = [straight.snapshot(), resumed.snapshot()];
+      expect(b.evaluation).toEqual(a.evaluation);
+      expect(b.timeline).toEqual(a.timeline);
+      expect(b.dead).toEqual(a.dead);
       // Crossing into epoch 3 takes about 4 epochs of training in all: a few seconds.
     }, 30_000);
   }
@@ -429,3 +434,117 @@ describe('MnistSession with a CNN', () => {
     expect(structuredClone(message)).toEqual(message);
   });
 });
+
+describe('MnistSession gradient views', () => {
+  /**
+   * No max-pool here: blank background gives exactly tied pool windows, where the
+   * loss has a kink that central differences straddle (pool gradients are checked
+   * on tie-free inputs in the engine's gradient checks).
+   */
+  const TINY_CNN: MnistSessionConfig = {
+    ...SMALL,
+    network: {
+      conv: [
+        { kind: 'conv', filters: 3, kernel: 5, stride: 1, padding: 'valid', activation: 'tanh' },
+        { kind: 'conv', filters: 4, kernel: 3, stride: 2, padding: 'same', activation: 'tanh' },
+      ],
+      hidden: [],
+    },
+  };
+
+  it('records a histogram column per record for every conv and dense layer, named', () => {
+    const s = new MnistSession({ ...SMALL, batchSize: 100 });
+    expect(s.snapshot().timeline.epochs).toEqual(Float32Array.from([0]));
+    advance(s, 100); // 2 more records
+    const snap = s.snapshot();
+    expect(Array.from(snap.timeline.epochs)).toEqual([0, 1, 2]);
+    expect(snap.layerNames).toEqual(['Input → H1', 'H1 → Output']);
+    expect(snap.timeline.layers).toHaveLength(2);
+    expect(snap.timeline.layers[0]!.gradRms.every((v) => v > 0)).toBe(true);
+    expect(snap.gradEvalSize).toBe(500);
+    expect(new MnistSession(CNN_FOR_NAMES).snapshot().layerNames).toEqual([
+      'Conv 1',
+      'Dense 1',
+      'Output',
+    ]);
+  });
+
+  it('flags ReLU units that are 0 on every gradient image, and they stay dead', () => {
+    const s = new MnistSession(SMALL);
+    const c = s.checkpoint();
+    const W = c.params['0.W']!;
+    for (let p = 0; p < 784; p++) W[p * 16 + 3] = 0; // unit 4: no input…
+    c.params['0.b']![3] = -1; // …and a negative bias: always 0 after ReLU
+    const killed = new MnistSession({ ...SMALL, resume: c });
+    advance(killed, Math.ceil(RECORD_EVERY / 64));
+    const { dead } = killed.snapshot();
+    expect(dead).toHaveLength(1);
+    expect(dead[0]!.layer).toBe(0);
+    expect(dead[0]!.flags[3]).toBe(1);
+    // Every flag agrees with the hidden layer computed image by image on the gradient subset.
+    const gradEval = shuffleInPlace(range(10_000), new Rng(0)).slice(0, 500);
+    const alive = new Uint8Array(16);
+    for (const i of gradEval) {
+      const pixels = Float32Array.from(
+        data.train.images.subarray(i * 784, (i + 1) * 784),
+        (v) => v / 255,
+      );
+      killed.predict(pixels).hidden!.forEach((v, j) => v !== 0 && (alive[j] = 1));
+    }
+    expect(Array.from(dead[0]!.flags)).toEqual(Array.from(alive, (a) => 1 - a));
+  });
+
+  it('the drawn digit’s input gradient matches finite differences of its loss', () => {
+    const s = advance(new MnistSession(TINY_CNN), 20);
+    const image = testImage(4);
+    const target = 3;
+    const { prediction } = s.snapshot({ drawn: image, gradTarget: target });
+    expect(prediction!.target).toBe(target);
+    const loss = (img: Float32Array) => -Math.log(s.predict(img, target).probs[target]!);
+    // The 60 pixels with the largest gradients (the rest are mostly zero).
+    const g = prediction!.inputGrad!;
+    const pixels = Array.from(g.keys())
+      .sort((a, b) => Math.abs(g[b]!) - Math.abs(g[a]!))
+      .slice(0, 60);
+    const eps = 1e-2;
+    const numeric = pixels.map((p) => {
+      const up = image.slice();
+      const down = image.slice();
+      up[p]! += eps;
+      down[p]! -= eps;
+      return (
+        (loss(up) - loss(down)) / (Math.fround(image[p]! + eps) - Math.fround(image[p]! - eps))
+      );
+    });
+    const result = compareGrads(
+      'input',
+      pixels.map((p) => g[p]!),
+      numeric,
+      1e-3,
+    );
+    expect(result.relError).toBeLessThan(1e-3);
+  });
+
+  it('gradient maps match the feature maps’ shapes; the default target is the network’s answer', () => {
+    const s = advance(new MnistSession(TINY_CNN), 20);
+    const { prediction } = s.snapshot({ drawn: testImage(0) });
+    const p = prediction!;
+    expect(p.target).toBe(p.probs.indexOf(Math.max(...p.probs)));
+    expect(p.gradMaps!.map((m) => [m.row, m.shape])).toEqual(p.maps!.map((m) => [m.row, m.shape]));
+    expect(p.inputGrad).toHaveLength(784);
+    // The last row feeds the output layer directly, so its gradient is non-zero.
+    expect(p.gradMaps!.at(-1)!.data.some((v) => v !== 0)).toBe(true);
+  });
+});
+
+/** conv 4 → pool → dense 16 → 10, for the layer names. */
+const CNN_FOR_NAMES: MnistSessionConfig = {
+  ...SMALL,
+  network: {
+    conv: [
+      { kind: 'conv', filters: 4, kernel: 5, stride: 1, padding: 'valid', activation: 'relu' },
+      { kind: 'pool', size: 2 },
+    ],
+    hidden: [{ units: 16, activation: 'relu' }],
+  },
+};

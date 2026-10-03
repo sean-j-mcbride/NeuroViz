@@ -32,7 +32,7 @@ interface WorkerSession {
   advance(): void;
   setHyperparams(h: Hyperparams): void;
   data(): { data: SessionData | MnistSessionData; transfer: ArrayBuffer[] };
-  snapshot(req: { probe?: ProbeRef; drawn?: Float32Array }): {
+  snapshot(req: { probe?: ProbeRef; drawn?: Float32Array; gradTarget?: number }): {
     snapshot: Snapshot | MnistSnapshot;
     transfer: ArrayBuffer[];
   };
@@ -65,8 +65,10 @@ function mnist(s: MnistSession): WorkerSession {
     advance: () => s.advance(),
     setHyperparams: (h) => s.setHyperparams(h),
     data: () => ({ data: s.data(), transfer: [] }),
-    snapshot: ({ drawn }) => {
-      const snapshot = s.snapshot(drawn ? { drawn } : undefined);
+    snapshot: ({ drawn, gradTarget }) => {
+      const snapshot = s.snapshot(
+        drawn ? { drawn, ...(gradTarget !== undefined && { gradTarget }) } : undefined,
+      );
       return { snapshot, transfer: mnistSnapshotBuffers(snapshot) };
     },
     checkpoint: () => {
@@ -142,6 +144,7 @@ export class TrainingController {
         const { snapshot, transfer } = this.requireSession().snapshot({
           ...(msg.probe && { probe: msg.probe }),
           ...(msg.drawn && { drawn: msg.drawn }),
+          ...(msg.gradTarget !== undefined && { gradTarget: msg.gradTarget }),
         });
         this.post(
           { type: 'snapshot', sessionId: this.sessionId, requestId: msg.requestId, snapshot },
