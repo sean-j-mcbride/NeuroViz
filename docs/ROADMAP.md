@@ -679,16 +679,96 @@ Adam lr 0.003, batch 32):
 - **98 % is reached, not held.** After its first 98 % record the Small CNN hovers between about
   97 % and 98.6 %. One test image is 0.05 %, and with only 10,000 training images it is close
   to its ceiling. Seed 5 takes 8.5 epochs (~53 s).
-- **The CNN is still slow per image:** ~6 s an epoch, against the MLP's ~0.4 s. JS is scalar,
-  and the conv layers do 3× the MLP's arithmetic over less sparse data. WebGPU (stretch) is the
-  real fix. Big networks (32 filters, same padding) train at a crawl; the multiply-add count in
-  the hint warns of this.
+- ~~**The CNN is still slow per image:** ~6 s an epoch, against the MLP's ~0.4 s.~~ About 2.3×
+  faster since the follow-up below (Wasm SIMD kernels): ~2.7 s an epoch.
 - **Evaluation takes about a fifth of CNN training time**: 3,000 images every 5,000.
 - **Feature maps come only with a drawn or chosen input,** in the snapshot after it changes. For
   a moment after a new drawing, the maps can belong to the previous one.
 - **Gaps between feature-map tiles scale with each layer's pixel size,** so deep 4×4 maps look
   chunky. That is deliberate: equal tile sizes, with the labels giving the true `C × H × W`.
-- **No gradient views for CNNs** (no histograms, dead-filter flags or step-through), and no MNIST
-  share links, presets or compare, as in Phase 5.
+- ~~**No gradient views for CNNs**~~ (histograms, dead flags and gradient maps added in the
+  follow-up below; still no animated step-through). No MNIST share links, presets or compare, as
+  in Phase 5.
 - **Canvas drawing has no component tests** (jsdom has no 2D context). It was checked through
   driver screenshots in light and dark mode. Only headless Chrome was tried.
+
+### Phase 6 follow-up — CNN speed and gradient views (2026-10-03)
+
+**Done** (one commit each):
+
+1. **Conv2D runs on WebAssembly SIMD kernels, with bitwise-identical results.**
+   - `src/engine/wasm/kernels.wat` (951 bytes) holds an f64x2 SIMD `nn` / `tn` matmul and
+     im2col/col2im.
+   - `npm run build:wasm` compiles it with wabt (a dev-only dependency) into a committed byte
+     array, `kernels.ts`, so the engine needs no fetch and runs unchanged in Node, the worker and
+     the build. A test checks the committed bytes are current.
+   - Speed: **29 → 15 ms per batch of 64** in Node. In the browser the Small CNN went from
+     **6.2 to 2.7 s an epoch**, and its first 98 % record (epoch 5.5, seed 1) now comes **~15 s**
+     after Play (was ~36 s).
+   - The records are the same, value for value, as before.
+2. **The MNIST session measures gradients at every record.**
+   - ∂(mean loss + L2)/∂W over a fixed 500-image training subset feeds the Phase 3 histogram
+     timeline, one layer per conv or dense layer.
+   - Dead ReLU units and channels come from the same pass.
+   - Cost: 7 % of training time (CNN 7.0 %, MLP 7.5 %).
+   - For a drawn digit, a CNN also returns ∂L/∂ each row's output and ∂L/∂ the input, for the
+     loss against a chosen class. These are checked against finite differences.
+   - Charts and dead flags are saved: **MNIST model files format 3**. Versions 1 and 2 still load,
+     with the charts restarting at the loaded record.
+3. **The MNIST tab gains views:**
+   - the **Inside training** panel (gradient RMS per layer, weight and gradient histograms, a table
+     with dead counts) for MLPs and CNNs;
+   - **dead units hatched** on the MLP's first-layer tiles and on CNN filters, counted in the conv
+     picker and in the tables;
+   - a **Gradients** view in the feature-maps panel: −∂L/∂ each map and a saliency map on the
+     input, for "its answer" or any digit. Receptive-field clicks work there too. 443 tests.
+
+**Decisions:**
+
+- **A spike came first, with a stop rule** (agreed): carry on only if a whole training batch got
+  ≥ 1.5× faster. It reached 1.95× in Node.
+  - Unrolling the SIMD loop to two vectors per step was tried and gave nothing measurable, so the
+    kernels stay simple.
+  - The time left in a CNN batch is now ~85 % conv layers.
+- **Exact by construction:**
+  - every output element is the float64 sum, in ascending order, of float32 × float32 products
+    (exact in float64);
+  - SIMD runs across output elements, never across a sum, and there is no FMA;
+  - zero-skipping only when B is finite, as in `tensor.ts`;
+  - so Wasm and JS agree bitwise on every test configuration (chunked batches, `inputGrad` off,
+    NaN/Inf weights), and every seeded test is unchanged.
+- **Runtime:**
+  - one lazily created instance, compiled synchronously (under Chrome's 4 KB main-thread limit);
+  - a first-fit allocator, with each layer's Wasm blocks released by a `FinalizationRegistry` when
+    the layer is collected;
+  - views made per call, because growing memory detaches them;
+  - the JS kernels run wherever Wasm is missing or refused, with the same results.
+  - `setKernelBackend('js' | 'wasm' | 'auto')` is for tests and benchmarks.
+- **Only im2col and the matmuls moved to Wasm.** The output scatter, the dY gather, bias sums and
+  max-pool stay in JS, working on views of Wasm memory: they are cheap. Small helpers are shared
+  by both paths.
+- **The gradient subset is the first 500 images of the fixed train-evaluation subset,** in chunks
+  of 250, combined as a size-weighted mean in float64. Evaluation mode, and observing never
+  changes the run: tests interleave snapshots with gradient targets.
+- **The timeline's x is the record index,** shown as epochs (`recordEpoch`). The shared charts take
+  a `TimelineAxis` (layer names, x wording), so the playground renders exactly as before.
+- **Gradient maps show −∂L/∂ (the descent direction):** blue means "raise this to be more sure of
+  the target". L is this one image's cross-entropy against the target, and the input map is
+  signed, not |∂L/∂x|.
+- **The finite-difference test uses a CNN without max-pool.** Blank background gives exactly tied
+  pool windows, where the loss has a kink that central differences straddle. Pool gradients are
+  already checked on tie-free inputs.
+- **Dead means 0 on all 500 gradient images.** A test checks every flag against the hidden layer
+  computed image by image.
+
+**Known issues:**
+
+- **No animated step-through for CNNs:** gradient maps show the backward pass for one image all
+  at once.
+- **Wasm memory is only released when a layer is garbage-collected,** so it can stay high for a
+  while after rebuilding big networks.
+- **Wasm SIMD needs Safari ≥ 16.4.** Older browsers fall back to the JS kernels, at the old speed.
+- **One full-suite run once took 974 s on a CNN resume test.** It did not reproduce: the same test
+  takes ~6 s alone, and later full runs take ~30 s.
+- **The dead-ReLU picture can be stark:** at Adam lr 0.1, 117 of 128 MLP units died within 5 s. It
+  shows the Phase 4 "Dead ReLUs" lesson on MNIST, but there is no MNIST preset for it.

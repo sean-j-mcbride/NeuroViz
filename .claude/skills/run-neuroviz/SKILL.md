@@ -188,6 +188,15 @@ All of these must pass at the end of each phase (CLAUDE.md).
   `clickat [aria-label^="Pool 2"] 0.08 0.2` and `text .map-readout` should report the
   receptive field "input rows 4–19, columns 8–23 (16 × 16 pixels)".
 
+- **Gradient views (Phase 6 follow-up):** after a Test image,
+  `click .feature-maps-panel button:has-text("Gradients")`, then
+  `select .feature-maps-panel .field select 3` to take gradients for "3" (the select is named by
+  its label, so `[aria-label=…]` doesn't match it). The Inside training panel is `.mnist-inside`;
+  `click .mnist-inside button:has-text("Table")` then `text .mnist-inside .data-table >> nth=1`
+  prints gradient RMS per record.
+- **Wasm kernels:** after editing `src/engine/wasm/kernels.wat`, run `npm run build:wasm`; the
+  kernels test fails if the committed bytes are stale.
+
 ## Troubleshooting
 
 - **`Chrome failed to launch (… is not found at …); trying bundled Chromium.`**: Chrome isn't
