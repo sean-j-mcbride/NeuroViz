@@ -104,14 +104,13 @@ export function DigitPad({ onChange, ref }: DigitPadProps) {
       height={PAD}
       aria-label="Drawing pad: draw a digit from 0 to 9"
       onPointerDown={(e) => {
+        if (e.button !== 0) return; // only the primary button (or a touch / pen contact) draws
         e.currentTarget.setPointerCapture(e.pointerId);
         last.current = null;
         stroke(point(e));
       }}
       onPointerMove={(e) => {
-        if (e.buttons & 1 || e.pointerType === 'touch') {
-          if (last.current) stroke(point(e));
-        }
+        if (last.current && (e.buttons & 1 || e.pointerType === 'touch')) stroke(point(e));
       }}
       onPointerUp={() => (last.current = null)}
       onPointerCancel={() => (last.current = null)}

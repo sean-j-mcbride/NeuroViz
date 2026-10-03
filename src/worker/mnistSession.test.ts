@@ -88,6 +88,14 @@ describe('MnistSession', () => {
     expect(snap.errors.count).toBe(snap.losses.count);
   });
 
+  it('a batch larger than the record interval still keeps the record schedule (and resumes)', () => {
+    const s = new MnistSession({ ...SMALL, batchSize: 'full' });
+    s.advance(); // 10,000 examples: records due at 5,000 and 10,000
+    expect(s.snapshot().losses.count).toBe(10_000 / RECORD_EVERY + 1);
+    const resumed = new MnistSession({ ...SMALL, batchSize: 'full', resume: s.checkpoint() });
+    expect(resumed.examples).toBe(10_000);
+  });
+
   it('the last batch of an epoch is partial', () => {
     const s = new MnistSession({ ...SMALL, batchSize: 256 });
     advance(s, 40); // 39 × 256 = 9,984, then 16

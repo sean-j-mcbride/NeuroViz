@@ -89,7 +89,7 @@ says which one ran, e.g. `browser: chrome 154.0.8037.95`.
 | `upload FILE SELECTOR`     | give FILE to a hidden file input, e.g. `[aria-label="Model file to load"]`; prints the notice    |
 | `goto URL` / `reload`      | load a URL (e.g. a share link with a settings hash) / reload; waits for the first snapshot       |
 | `url`                      | the current address, including the settings hash the app keeps in step                           |
-| `draw SELECTOR FX,FY …`     | MNIST pad: press, drag through the points (fractions of the box), release; `\|` starts a new stroke |
+| `draw SELECTOR PTS…`       | MNIST pad: drag through `FX,FY` points (fractions of the box); `\|` starts a new stroke          |
 | `workers`                  | URLs of running Web Workers (proves training is off the main thread)                             |
 | `errors`                   | console errors and page errors collected so far                                                  |
 

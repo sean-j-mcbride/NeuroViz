@@ -22,18 +22,22 @@ function createClient(): TrainingClient<MnistTask> {
   );
 }
 
-/** Fetches the bundled images into the MNIST store (once; retried on the next mount if it failed). */
+/**
+ * Fetches the bundled images into the MNIST store whenever it is `idle`: on
+ * first use, and again when "Try again" resets a failed load to idle.
+ */
 function useMnistData(): void {
+  const status = useMnistStore((s) => s.data.status);
   useEffect(() => {
-    const { data, setData } = useMnistStore.getState();
-    if (data.status === 'ready' || data.status === 'loading') return;
+    if (status !== 'idle') return;
+    const { setData } = useMnistStore.getState();
     setData({ status: 'loading' });
     loadMnist().then(
       (subset) => setData({ status: 'ready', subset }),
       (e: unknown) =>
         setData({ status: 'error', message: e instanceof Error ? e.message : String(e) }),
     );
-  }, []);
+  }, [status]);
 }
 
 /**
@@ -99,5 +103,9 @@ export function useMnistWorker(): {
     };
   }, [client, running, speed, subset]);
 
-  return { step: () => client.step(), requestCheckpoint: () => client.requestCheckpoint() };
+  return {
+    // Before the images load there is no session to step.
+    step: () => subset && client.step(),
+    requestCheckpoint: () => client.requestCheckpoint(),
+  };
 }

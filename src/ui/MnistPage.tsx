@@ -19,7 +19,7 @@ import {
   topUnits,
   unitStats,
 } from '../viz';
-import type { MnistSnapshot, Speed } from '../worker';
+import { type MnistSnapshot, type Speed, TRAIN_EVAL_SIZE } from '../worker';
 import { HyperparamControls } from './OptimiserControls';
 import { MnistArchitecture } from './MnistArchitecture';
 import { MnistProjectBar } from './MnistProjectBar';
@@ -274,9 +274,9 @@ function TrainingPanel({ snapshot }: { snapshot: MnistSnapshot }) {
         </tbody>
       </table>
       <p className="hint">
-        Test: all {snapshot.testSize.toLocaleString('en-GB')} test images. Train: a fixed 1,000 of
-        the {trainSize.toLocaleString('en-GB')} training images. Measured every{' '}
-        {recordEvery.toLocaleString('en-GB')} images.
+        Test: all {snapshot.testSize.toLocaleString('en-GB')} test images. Train: a fixed{' '}
+        {TRAIN_EVAL_SIZE.toLocaleString('en-GB')} of the {trainSize.toLocaleString('en-GB')}{' '}
+        training images. Measured every {recordEvery.toLocaleString('en-GB')} images.
       </p>
       <div className="loss-header">
         <h3>Loss</h3>

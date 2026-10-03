@@ -200,11 +200,17 @@ export class MnistSession {
     return { loss: lossSum / indices.length, accuracy: correct / indices.length };
   }
 
+  /**
+   * Evaluates once and logs it for every record now due: one, unless a batch
+   * was larger than the record interval, so record k stays at k · RECORD_EVERY.
+   */
   private record(): void {
     const tr = this.evaluate(this.train, this.trainEval);
     const te = this.evaluate(this.test, this.testAll, this.evaluation);
-    this.losses.push(Math.fround(tr.loss), Math.fround(te.loss));
-    this.errors.push(Math.fround(1 - tr.accuracy), Math.fround(1 - te.accuracy));
+    do {
+      this.losses.push(Math.fround(tr.loss), Math.fround(te.loss));
+      this.errors.push(Math.fround(1 - tr.accuracy), Math.fround(1 - te.accuracy));
+    } while (this.examples >= this.losses.count * RECORD_EVERY);
   }
 
   /** The network's output for one 28×28 input in [0, 1]. Evaluation mode. */
