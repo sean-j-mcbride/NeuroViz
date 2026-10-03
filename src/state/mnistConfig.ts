@@ -61,17 +61,34 @@ export const MNIST_NEW_CONV: ConvLayerSpec = {
 };
 export const MNIST_NEW_POOL: ConvLayerSpec = { kind: 'pool', size: 2 };
 
-/** "Start from" networks in the builder. */
-export const MNIST_TEMPLATES: Record<'mlp' | 'cnn', MnistNetworkSpec> = {
-  mlp: MNIST_DEFAULT_CONFIG.network,
+/**
+ * "Start from" networks in the builder, with the learning rate and batch size
+ * that suit them (other settings are left alone). The Small CNN's come from a
+ * seeded sweep (see the CNN done-when test in mnistSession.test.ts): at the
+ * MLP's lr 0.001 it was still at 96.6–97.3 % test after 6 epochs.
+ */
+export const MNIST_TEMPLATES: Record<
+  'mlp' | 'cnn',
+  { network: MnistNetworkSpec; training: Pick<Hyperparams, 'lr' | 'batchSize'> }
+> = {
+  mlp: {
+    network: MNIST_DEFAULT_CONFIG.network,
+    training: {
+      lr: MNIST_DEFAULT_CONFIG.training.lr,
+      batchSize: MNIST_DEFAULT_CONFIG.training.batchSize,
+    },
+  },
   cnn: {
-    conv: [
-      { kind: 'conv', filters: 8, kernel: 5, stride: 1, padding: 'valid', activation: 'relu' },
-      { kind: 'pool', size: 2 },
-      { kind: 'conv', filters: 16, kernel: 5, stride: 1, padding: 'valid', activation: 'relu' },
-      { kind: 'pool', size: 2 },
-    ],
-    hidden: [],
+    network: {
+      conv: [
+        { kind: 'conv', filters: 8, kernel: 5, stride: 1, padding: 'valid', activation: 'relu' },
+        { kind: 'pool', size: 2 },
+        { kind: 'conv', filters: 16, kernel: 5, stride: 1, padding: 'valid', activation: 'relu' },
+        { kind: 'pool', size: 2 },
+      ],
+      hidden: [],
+    },
+    training: { lr: 0.003, batchSize: 32 },
   },
 };
 

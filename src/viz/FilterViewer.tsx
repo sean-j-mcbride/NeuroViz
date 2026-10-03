@@ -7,7 +7,7 @@ import { Tooltip } from './Tooltip';
 
 const GAP = 1;
 /** Largest CSS size of one kernel tile. */
-const TILE_PX = 40;
+const TILE_PX = 56;
 
 export type FilterScale = 'tile' | 'shared';
 

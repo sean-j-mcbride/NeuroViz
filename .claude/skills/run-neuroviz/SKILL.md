@@ -69,29 +69,30 @@ to `http://localhost:5173`. Screenshots go to `$TMPDIR/neuroviz-shots/<name>.png
 bundled Chromium if Chrome won't launch; `--browser chromium` forces it. The first stderr line
 says which one ran, e.g. `browser: chrome 154.0.8037.95`.
 
-| command                    | what it does                                                                                     |
-| -------------------------- | ------------------------------------------------------------------------------------------------ |
-| `shot NAME [SELECTOR]`     | full-page screenshot, or just one element                                                        |
-| `click SELECTOR`           | Playwright selector, e.g. `button:has-text("Step")`, `[aria-label="Add a hidden layer"]`         |
-| `select SELECTOR VALUE`    | choose a `<select>` option (the last word is the value)                                          |
-| `hover SELECTOR`           | move the mouse to the element's centre and print any tooltip text                                |
-| `move SELECTOR FX FY`      | move the mouse to (FX, FY) as fractions of the element's box (e.g. a point on the loss curve)    |
-| `text SELECTOR`            | print the element's text                                                                         |
-| `wait MS`                  | sleep                                                                                            |
-| `play MS`                  | Play, wait, Pause, let the last snapshot land; prints the epoch and loss/accuracy table          |
-| `measure`                  | while training: epochs/s, readout updates/s (≈ snapshots/s) and main-thread fps over 2 s         |
-| `sweep [MS]`               | sweep the mouse over the network graph (hover cost): fps, worst frame, number of moves           |
-| `throttle RATE`            | slow the page CPU RATE× via CDP (1 = off), to mimic a slower machine                             |
-| `pick [FX FY]`             | open step-through and pick the data point nearest (FX, FY) on the output plot (default 0.75 0.3) |
-| `next [N\|end]`            | advance step-through; prints the stage name and the neuron value badges                          |
-| `deep relu\|sigmoid\|tanh` | circle data, 6 hidden layers × 8 units, all one activation (the Phase 3 demo)                    |
-| `download NAME SELECTOR`   | click SELECTOR (e.g. `button:has-text("Save model")`) and save the download to the output dir    |
-| `upload FILE SELECTOR`     | give FILE to a hidden file input, e.g. `[aria-label="Model file to load"]`; prints the notice    |
-| `goto URL` / `reload`      | load a URL (e.g. a share link with a settings hash) / reload; waits for the first snapshot       |
-| `url`                      | the current address, including the settings hash the app keeps in step                           |
-| `draw SELECTOR PTS…`       | MNIST pad: drag through `FX,FY` points (fractions of the box); `\|` starts a new stroke          |
-| `workers`                  | URLs of running Web Workers (proves training is off the main thread)                             |
-| `errors`                   | console errors and page errors collected so far                                                  |
+| command                    | what it does                                                                                       |
+| -------------------------- | -------------------------------------------------------------------------------------------------- |
+| `shot NAME [SELECTOR]`     | full-page screenshot, or just one element                                                          |
+| `click SELECTOR`           | Playwright selector, e.g. `button:has-text("Step")`, `[aria-label="Add a hidden layer"]`           |
+| `select SELECTOR VALUE`    | choose a `<select>` option (the last word is the value)                                            |
+| `hover SELECTOR`           | move the mouse to the element's centre and print any tooltip text                                  |
+| `move SELECTOR FX FY`      | move the mouse to (FX, FY) as fractions of the element's box (e.g. a point on the loss curve)      |
+| `clickat SELECTOR FX FY`   | scroll the element into view and click at (FX, FY) as fractions of its box (one feature-map pixel) |
+| `text SELECTOR`            | print the element's text                                                                           |
+| `wait MS`                  | sleep                                                                                              |
+| `play MS`                  | Play, wait, Pause, let the last snapshot land; prints the epoch and loss/accuracy table            |
+| `measure`                  | while training: epochs/s, readout updates/s (≈ snapshots/s) and main-thread fps over 2 s           |
+| `sweep [MS]`               | sweep the mouse over the network graph (hover cost): fps, worst frame, number of moves             |
+| `throttle RATE`            | slow the page CPU RATE× via CDP (1 = off), to mimic a slower machine                               |
+| `pick [FX FY]`             | open step-through and pick the data point nearest (FX, FY) on the output plot (default 0.75 0.3)   |
+| `next [N\|end]`            | advance step-through; prints the stage name and the neuron value badges                            |
+| `deep relu\|sigmoid\|tanh` | circle data, 6 hidden layers × 8 units, all one activation (the Phase 3 demo)                      |
+| `download NAME SELECTOR`   | click SELECTOR (e.g. `button:has-text("Save model")`) and save the download to the output dir      |
+| `upload FILE SELECTOR`     | give FILE to a hidden file input, e.g. `[aria-label="Model file to load"]`; prints the notice      |
+| `goto URL` / `reload`      | load a URL (e.g. a share link with a settings hash) / reload; waits for the first snapshot         |
+| `url`                      | the current address, including the settings hash the app keeps in step                             |
+| `draw SELECTOR PTS…`       | MNIST pad: drag through `FX,FY` points (fractions of the box); `\|` starts a new stroke            |
+| `workers`                  | URLs of running Web Workers (proves training is off the main thread)                               |
+| `errors`                   | console errors and page errors collected so far                                                    |
 
 Deep sigmoid vs ReLU, on the static build in dark mode:
 
@@ -176,6 +177,16 @@ All of these must pass at the end of each phase (CLAUDE.md).
   server, `training.worker-<hash>.js` on the preview build.
 - **Kill servers by port** (`lsof -ti:PORT -sTCP:LISTEN | xargs kill`). `$!` after `npm run dev &`
   is only the npm wrapper.
+
+- **Scope selectors to the visible tab on MNIST.** Both tabs stay mounted, so
+  `button:has-text("Play")` can match the hidden playground's button and every later command
+  times out as if the page had hung. Use `.mnist-page button:has-text("Play")`.
+- **Clicking the centre of a tiled canvas can hit a gap.** Feature maps and filters are tiles
+  with gaps; with an even number of columns the centre is a gap. Use `clickat` with fractions.
+- **CNN check (Phase 6):** `click .mnist-page button:has-text("Small CNN")`, Play for a few
+  seconds, Pause, `click .mnist-page button:has-text("Test image")`, then
+  `clickat [aria-label^="Pool 2"] 0.08 0.2` and `text .map-readout` should report the
+  receptive field "input rows 4–19, columns 8–23 (16 × 16 pixels)".
 
 ## Troubleshooting
 

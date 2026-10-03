@@ -118,6 +118,17 @@ const commands = {
     await page.waitForTimeout(200);
     return { tooltip: await tooltip() };
   },
+  /** clickat SELECTOR FX FY — click at (FX, FY) as fractions of the element's box (e.g. one feature-map pixel). */
+  async clickat(...words) {
+    const fy = Number(words.pop());
+    const fx = Number(words.pop());
+    const el = page.locator(words.join(' ')).first();
+    await el.scrollIntoViewIfNeeded(); // mouse coordinates are viewport coordinates
+    const box = await el.boundingBox();
+    await page.mouse.click(box.x + fx * box.width, box.y + fy * box.height);
+    await page.waitForTimeout(200);
+    return {};
+  },
   /**
    * draw SELECTOR FX,FY FX,FY … [| FX,FY …] — press, drag through the points (fractions of the
    * element's box) and release; `|` starts a new stroke. For the MNIST digit pad.

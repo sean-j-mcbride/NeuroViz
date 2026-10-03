@@ -19,7 +19,8 @@ describe('MNIST network builder', () => {
     expect(button('MLP').getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByText('784 inputs (28 × 28 pixels)')).toBeTruthy();
     fireEvent.click(button('Small CNN'));
-    expect(s().config.network).toEqual(MNIST_TEMPLATES.cnn);
+    expect(s().config.network).toEqual(MNIST_TEMPLATES.cnn.network);
+    expect(s().config.training).toMatchObject({ lr: 0.003, batchSize: 32 });
     expect(button('Small CNN').getAttribute('aria-pressed')).toBe('true');
     const shapes = within(imageLayers())
       .getAllByText(/^→ /)
@@ -76,11 +77,12 @@ describe('MNIST network builder', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('MLP returns to the default network', () => {
+  it('MLP returns to the default network and its learning rate and batch size', () => {
     render(<MnistArchitecture />);
     fireEvent.click(button('Small CNN'));
     fireEvent.click(button('MLP'));
     expect(s().config.network).toEqual(MNIST_DEFAULT_CONFIG.network);
+    expect(s().config.training).toEqual(MNIST_DEFAULT_CONFIG.training);
   });
 });
 

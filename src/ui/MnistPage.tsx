@@ -224,8 +224,8 @@ function TryPanel({
           Clear
         </button>
         {onTestImage && (
-          <button type="button" onClick={onTestImage}>
-            Show a test image
+          <button type="button" onClick={onTestImage} title="Show a random image from the test set">
+            Test image
           </button>
         )}
         {drawn && (
@@ -455,7 +455,7 @@ export function MnistPage() {
             <>
               <h2>Feature maps</h2>
               <p className="hint">
-                Draw a digit, or press “Show a test image”, to see what every layer makes of it.
+                Draw a digit, or press “Test image”, to see what every layer makes of it.
               </p>
             </>
           )}

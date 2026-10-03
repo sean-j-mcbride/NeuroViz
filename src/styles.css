@@ -1031,7 +1031,7 @@ button.close {
 
 .mnist-grid {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 300px;
+  grid-template-columns: 280px minmax(0, 1fr) 300px;
   gap: 16px;
   align-items: start;
 }
@@ -1056,6 +1056,7 @@ button.close {
   padding: 0;
   margin: 0 0 10px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
@@ -1085,6 +1086,7 @@ button.close {
 /* A conv or pool row: its controls, then a second line with stride/padding and the output shape. */
 .layer-block {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   padding: 6px;
   border: 1px solid var(--border);
@@ -1100,17 +1102,19 @@ button.close {
   border-color: var(--error);
 }
 
-.layer-detail {
-  align-items: center;
-  padding-left: 44px;
+.layer-detail select {
+  flex: 1 1 0;
 }
 
-.layer-detail select {
-  flex: 0 1 auto;
+.layer-out {
+  text-align: right;
+}
+
+.layer-block select {
+  padding: 4px 2px 4px 6px;
 }
 
 .layer-shape {
-  margin-left: auto;
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;

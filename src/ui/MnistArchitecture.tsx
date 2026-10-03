@@ -27,7 +27,9 @@ import {
 
 const times = (s: Shape) => s.join(' × ');
 
-const PADDING_NAMES = { valid: 'no padding', same: 'same padding' } as const;
+const PADDING_NAMES = { valid: 'valid', same: 'same' } as const;
+const PADDING_TITLE =
+  'Valid: no padding, so each 5×5 kernel shrinks the map by 4. Same: zeros around the edge keep the size (at stride 1).';
 
 const TEMPLATE_NAMES = { mlp: 'MLP', cnn: 'Small CNN' } as const;
 
@@ -85,17 +87,6 @@ function ConvRow({
                 </option>
               ))}
             </select>
-            <select
-              value={row.activation}
-              onChange={(e) => onChange({ ...row, activation: e.target.value as Activation })}
-              aria-label={`Activation of conv layer ${n}`}
-            >
-              {ACTIVATIONS.map((a) => (
-                <option key={a} value={a}>
-                  {ACTIVATION_NAMES[a]}
-                </option>
-              ))}
-            </select>
           </>
         )}
         <button
@@ -110,6 +101,17 @@ function ConvRow({
       <div className="layer-row layer-detail">
         {row.kind === 'conv' && (
           <>
+            <select
+              value={row.activation}
+              onChange={(e) => onChange({ ...row, activation: e.target.value as Activation })}
+              aria-label={`Activation of conv layer ${n}`}
+            >
+              {ACTIVATIONS.map((a) => (
+                <option key={a} value={a}>
+                  {ACTIVATION_NAMES[a]}
+                </option>
+              ))}
+            </select>
             <select
               value={row.stride}
               onChange={(e) => onChange({ ...row, stride: Number(e.target.value) })}
@@ -127,6 +129,7 @@ function ConvRow({
                 onChange({ ...row, padding: e.target.value as (typeof CONV_PADDINGS)[number] })
               }
               aria-label={`Padding of conv layer ${n}`}
+              title={PADDING_TITLE}
             >
               {CONV_PADDINGS.map((p) => (
                 <option key={p} value={p}>
@@ -136,8 +139,8 @@ function ConvRow({
             </select>
           </>
         )}
-        {out}
       </div>
+      <div className="layer-out">{out}</div>
     </li>
   );
 }
@@ -170,8 +173,12 @@ export function MnistArchitecture() {
             <button
               key={t}
               type="button"
-              aria-pressed={sameNetwork(network, MNIST_TEMPLATES[t])}
-              onClick={() => setNetwork(MNIST_TEMPLATES[t])}
+              aria-pressed={sameNetwork(network, MNIST_TEMPLATES[t].network)}
+              title={`${describeMnistNetwork(MNIST_TEMPLATES[t].network)}, learning rate ${MNIST_TEMPLATES[t].training.lr}, batch size ${MNIST_TEMPLATES[t].training.batchSize}`}
+              onClick={() => {
+                setNetwork(MNIST_TEMPLATES[t].network);
+                useMnistStore.getState().setTraining(MNIST_TEMPLATES[t].training);
+              }}
             >
               {TEMPLATE_NAMES[t]}
             </button>
