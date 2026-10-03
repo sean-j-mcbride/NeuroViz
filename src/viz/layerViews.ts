@@ -1,4 +1,10 @@
-import type { Activation, ConvFilters, ConvLayerSpec } from '../worker';
+import type {
+  Activation,
+  ConvFilters,
+  ConvLayerSpec,
+  DeadFlags,
+  MnistNetworkSpec,
+} from '../worker';
 import { NORMALISERS, type Normalisation } from './colour';
 
 /**
@@ -108,4 +114,40 @@ export function channelStats(data: Float32Array, [c, h, w]: readonly number[]): 
     }
     return { mean: sum / area, max, zeros: zeros / area };
   });
+}
+
+/** What each parameterised layer (conv, dense, output, in order) outputs, for dead counts. */
+export interface ParamLayerInfo {
+  units: number;
+  unitWord: 'channels' | 'units';
+  /** Whether a ReLU follows it (only then can its outputs be dead). */
+  relu: boolean;
+}
+
+export function paramLayerInfo({ conv, hidden }: MnistNetworkSpec): ParamLayerInfo[] {
+  return [
+    ...conv.flatMap((r) =>
+      r.kind === 'conv'
+        ? [{ units: r.filters, unitWord: 'channels' as const, relu: r.activation === 'relu' }]
+        : [],
+    ),
+    ...hidden.map((l) => ({
+      units: l.units,
+      unitWord: 'units' as const,
+      relu: l.activation === 'relu',
+    })),
+    { units: 10, unitWord: 'units' as const, relu: false },
+  ];
+}
+
+/** Dead flags for parameterised layer `layer`, or null if none are dead. */
+export function deadFlagsOf(dead: readonly DeadFlags[], layer: number): Uint8Array | null {
+  return dead.find((d) => d.layer === layer)?.flags ?? null;
+}
+
+/** "2 of 8 channels" for a ReLU layer, "–" otherwise. */
+export function deadText(info: ParamLayerInfo, flags: Uint8Array | null): string {
+  if (!info.relu) return '–';
+  const n = flags ? flags.reduce((a, f) => a + f, 0) : 0;
+  return `${n} of ${info.units} ${info.unitWord}`;
 }

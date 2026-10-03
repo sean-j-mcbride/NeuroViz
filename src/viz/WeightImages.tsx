@@ -21,6 +21,8 @@ interface WeightImagesProps {
   unitName: (j: number) => string;
   selected: number | null;
   onSelect: (j: number | null) => void;
+  /** 1 per dead unit (a ReLU that is 0 on every gradient image). */
+  dead?: Uint8Array | null;
 }
 
 /**
@@ -35,6 +37,7 @@ export function WeightImages({
   unitName,
   selected,
   onSelect,
+  dead = null,
 }: WeightImagesProps) {
   const ref = useRef<HTMLCanvasElement>(null);
   const lut = useHeatmapLut();
@@ -103,6 +106,10 @@ export function WeightImages({
           onSelect(unit === selected ? null : unit);
         }}
       />
+      {dead &&
+        Array.from(dead).flatMap((d, j) =>
+          d ? [<div key={`dead${j}`} className="tile-dead" style={box(j)} aria-hidden />] : [],
+        )}
       {active.map((j, rank) => (
         <div key={j} className="weight-active" style={box(j)} aria-hidden>
           {rank === 0 && <span>most active</span>}
@@ -122,6 +129,9 @@ export function WeightImages({
             ['Bias', formatPrecise(h.bias)],
             ...(hidden
               ? [['For your digit', formatPrecise(hidden[hover.unit]!)] as [string, string]]
+              : []),
+            ...(dead?.[hover.unit]
+              ? [['Dead', 'its ReLU output is 0 on every gradient image'] as [string, string]]
               : []),
           ]}
         />

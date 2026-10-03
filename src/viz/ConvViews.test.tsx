@@ -117,3 +117,75 @@ describe('FilterViewer', () => {
     expect(screen.getAllByRole('row')).toHaveLength(1 + 3);
   });
 });
+
+describe('FeatureMaps: gradients', () => {
+  const maps: FeatureMap[] = [{ row: 0, shape: [2, 24, 24], data: ramp(2 * 576) }];
+  const gradMaps: FeatureMap[] = [
+    { row: 0, shape: [2, 24, 24], data: ramp(2 * 576).map((v) => v - 0.5) },
+  ];
+  const rows1 = rows.slice(0, 1);
+
+  it('switches to −∂L/∂ maps and a saliency input, with a target digit to choose', () => {
+    const onGradTarget = vi.fn();
+    render(
+      <FeatureMaps
+        rows={rows1}
+        maps={maps}
+        input={ramp(784)}
+        gradMaps={gradMaps}
+        inputGrad={ramp(784)}
+        target={7}
+        gradTarget={null}
+        onGradTarget={onGradTarget}
+      />,
+    );
+    expect(screen.queryByText('Input (saliency)')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Gradients' }));
+    expect(screen.getByText('Input (saliency)')).toBeTruthy();
+    expect(screen.getByText(/more sure this is a 7/)).toBeTruthy();
+    const select = screen.getByRole('combobox', { name: 'Gradient for' }) as HTMLSelectElement;
+    expect(select.value).toBe('');
+    expect(screen.getByRole('option', { name: 'its answer (7)' })).toBeTruthy();
+    fireEvent.change(select, { target: { value: '3' } });
+    expect(onGradTarget).toHaveBeenLastCalledWith(3);
+    fireEvent.change(select, { target: { value: '' } });
+    expect(onGradTarget).toHaveBeenLastCalledWith(null);
+  });
+
+  it('has no Gradients view without gradient maps', () => {
+    render(<FeatureMaps rows={rows1} maps={maps} input={ramp(784)} />);
+    expect(screen.queryByRole('button', { name: 'Gradients' })).toBeNull();
+  });
+});
+
+describe('FilterViewer: dead filters', () => {
+  const filters: ConvFilters[] = [
+    {
+      row: 0,
+      inChannels: 1,
+      outChannels: 3,
+      kernel: 3,
+      stride: 1,
+      padding: 'valid',
+      W: ramp(27),
+      b: ramp(3),
+    },
+  ];
+
+  it('hatches dead filters and counts them in the table', () => {
+    const { container } = render(
+      <FilterViewer
+        filters={filters}
+        rows={rows}
+        dead={[{ layer: 0, flags: Uint8Array.from([0, 1, 1]) }]}
+      />,
+    );
+    expect(container.querySelectorAll('.tile-dead')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }));
+    const cells = screen
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => r.lastElementChild!.textContent);
+    expect(cells).toEqual(['–', 'yes', 'yes']);
+  });
+});

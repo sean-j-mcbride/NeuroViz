@@ -1498,3 +1498,25 @@ button.link {
   cursor: pointer;
   font: inherit;
 }
+
+/* A dead filter or unit tile: the same hatch as a dead neuron in the playground. */
+.tile-dead {
+  position: absolute;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent 0 3px,
+    color-mix(in srgb, var(--fg) 70%, transparent) 3px 4.5px
+  );
+}
+
+.field.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.mnist-inside {
+  margin-top: 16px;
+}

@@ -1,19 +1,41 @@
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 import { useAppStore } from '../state/store';
-import { GradientNorms, HistogramTimeline, InsideTables, depthColour, layerLabel } from '../viz';
+import {
+  EPOCH_AXIS,
+  GradientNorms,
+  HistogramTimeline,
+  InsideTables,
+  type TimelineAxis,
+  depthColour,
+} from '../viz';
 import { usePrefersDark } from '../viz/hooks';
+import type { TimelineSnapshot } from '../worker';
 
-/** Per-layer weight and gradient distributions over the run: spot vanishing or exploding gradients. */
-export function InsidePanel() {
-  const timeline = useAppStore((s) => s.snapshot?.timeline);
-  const columns = useAppStore((s) => s.snapshot?.columns);
+/**
+ * Per-layer weight and gradient distributions over a run, as charts or a table:
+ * spot vanishing or exploding gradients. Shared by the playground and MNIST.
+ */
+export function InsideTrainingPanel({
+  timeline,
+  axis = EPOCH_AXIS,
+  table,
+  normsHint,
+  className,
+}: {
+  timeline: TimelineSnapshot;
+  axis?: TimelineAxis;
+  /** The table view (an `InsideTables` with the page's dead counts). */
+  table: ReactNode;
+  /** What the gradient-size chart measures, under it. */
+  normsHint: ReactNode;
+  className?: string;
+}) {
   const dark = usePrefersDark();
   const [asTable, setAsTable] = useState(false);
-  if (!timeline) return null;
   const n = timeline.layers.length;
 
   return (
-    <section className="panel inside-panel">
+    <section className={`panel inside-panel ${className ?? ''}`}>
       <div className="panel-toolbar">
         <h2>Inside training</h2>
         <div className="segmented" role="group" aria-label="Show as">
@@ -27,7 +49,7 @@ export function InsidePanel() {
       </div>
 
       {asTable ? (
-        <InsideTables timeline={timeline} columns={columns} />
+        table
       ) : (
         <div className="inside-grid">
           <div className="inside-norms">
@@ -37,18 +59,13 @@ export function InsidePanel() {
                 {timeline.layers.map((_, k) => (
                   <span key={k} className="legend-item">
                     <span className="swatch" style={{ borderTopColor: depthColour(k, n, dark) }} />
-                    {layerLabel(k, n)}
+                    {axis.layerName(k, n)}
                   </span>
                 ))}
               </span>
             </div>
-            <GradientNorms timeline={timeline} />
-            <p className="hint">
-              Root-mean-square of ∂L/∂W over the training set (including the L2 term when L2 is on),
-              on a log scale. If the early layers (fainter lines) sit orders of magnitude below the
-              later ones (stronger lines), they barely learn — vanishing gradients. Try 6 sigmoid
-              layers, then ReLU.
-            </p>
+            <GradientNorms timeline={timeline} axis={axis} />
+            <p className="hint">{normsHint}</p>
           </div>
 
           <div className="inside-hists">
@@ -61,19 +78,21 @@ export function InsidePanel() {
               <div key={k} className="hist-row">
                 <span className="hist-label">
                   <span className="swatch" style={{ borderTopColor: depthColour(k, n, dark) }} />
-                  {layerLabel(k, n)}
+                  {axis.layerName(k, n)}
                 </span>
                 <HistogramTimeline
                   hist={l.weightHist}
                   epochs={timeline.epochs}
                   bins={timeline.weightBins}
-                  label={`${layerLabel(k, n)} weights`}
+                  label={`${axis.layerName(k, n)} weights`}
+                  at={axis.at}
                 />
                 <HistogramTimeline
                   hist={l.gradHist}
                   epochs={timeline.epochs}
                   bins={timeline.gradBins}
-                  label={`${layerLabel(k, n)} gradients`}
+                  label={`${axis.layerName(k, n)} gradients`}
+                  at={axis.at}
                 />
               </div>
             ))}
@@ -86,5 +105,26 @@ export function InsidePanel() {
         </div>
       )}
     </section>
+  );
+}
+
+/** The playground's Inside training panel. */
+export function InsidePanel() {
+  const timeline = useAppStore((s) => s.snapshot?.timeline);
+  const columns = useAppStore((s) => s.snapshot?.columns);
+  if (!timeline) return null;
+  return (
+    <InsideTrainingPanel
+      timeline={timeline}
+      table={<InsideTables timeline={timeline} columns={columns} />}
+      normsHint={
+        <>
+          Root-mean-square of ∂L/∂W over the training set (including the L2 term when L2 is on), on
+          a log scale. If the early layers (fainter lines) sit orders of magnitude below the later
+          ones (stronger lines), they barely learn — vanishing gradients. Try 6 sigmoid layers, then
+          ReLU.
+        </>
+      }
+    />
   );
 }

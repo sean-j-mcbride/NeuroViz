@@ -1,6 +1,6 @@
 import type { NeuronColumn, TimelineSnapshot } from '../worker';
 import { formatPrecise } from './colour';
-import { layerLabel } from './labels';
+import { EPOCH_AXIS, type TimelineAxis } from './labels';
 import { shareWhere } from './timelineStats';
 
 const pct = (f: number) => `${(f * 100).toFixed(1)} %`;
@@ -16,10 +16,17 @@ function deadText(column: NeuronColumn | undefined): string {
 export function InsideTables({
   timeline,
   columns,
+  axis = EPOCH_AXIS,
+  deadOf,
+  deadTitle = 'ReLU neurons fed by this layer that output 0 for every training point',
 }: {
   timeline: TimelineSnapshot;
   /** The snapshot's neuron columns, for the dead-neuron counts. */
   columns?: NeuronColumn[];
+  axis?: TimelineAxis;
+  /** Overrides the dead count shown for layer k (e.g. "2 of 8 channels"). */
+  deadOf?: (k: number) => string;
+  deadTitle?: string;
 }) {
   const { epochs, layers, weightBins, gradBins } = timeline;
   const n = layers.length;
@@ -31,7 +38,7 @@ export function InsideTables({
   return (
     <div className="inside-tables">
       <div>
-        <h3>Per layer at epoch {epochs[last]}</h3>
+        <h3>Per layer at {axis.at(epochs[last]!)}</h3>
         <table className="data-table">
           <thead>
             <tr>
@@ -40,10 +47,7 @@ export function InsideTables({
               <th scope="col">Weights with |w| &gt; 1</th>
               <th scope="col">Gradient RMS</th>
               <th scope="col">Gradients below 10⁻⁶</th>
-              <th
-                scope="col"
-                title="ReLU neurons fed by this layer that output 0 for every training point"
-              >
+              <th scope="col" title={deadTitle}>
                 Dead outputs
               </th>
             </tr>
@@ -51,12 +55,12 @@ export function InsideTables({
           <tbody>
             {layers.map((l, k) => (
               <tr key={k}>
-                <th scope="row">{layerLabel(k, n)}</th>
+                <th scope="row">{axis.layerName(k, n)}</th>
                 <td>{formatPrecise(l.weightRms[last]!)}</td>
                 <td>≈ {pct(shareWhere(l.weightHist, last, weightBins, (c) => Math.abs(c) > 1))}</td>
                 <td>{formatPrecise(l.gradRms[last]!)}</td>
                 <td>≈ {pct(shareWhere(l.gradHist, last, gradBins, (c) => c < 1e-6))}</td>
-                <td>{deadText(columns?.[k + 1])}</td>
+                <td>{deadOf ? deadOf(k) : deadText(columns?.[k + 1])}</td>
               </tr>
             ))}
           </tbody>
@@ -72,10 +76,10 @@ export function InsideTables({
           <table className="data-table">
             <thead>
               <tr>
-                <th scope="col">Epoch</th>
+                <th scope="col">{axis.column}</th>
                 {layers.map((_, k) => (
                   <th key={k} scope="col">
-                    {layerLabel(k, n)}
+                    {axis.layerName(k, n)}
                   </th>
                 ))}
                 {n > 1 && <th scope="col">First ÷ last</th>}
@@ -84,7 +88,7 @@ export function InsideTables({
             <tbody>
               {rows.map((t) => (
                 <tr key={t}>
-                  <th scope="row">{epochs[t]}</th>
+                  <th scope="row">{axis.cell(epochs[t]!)}</th>
                   {layers.map((l, k) => (
                     <td key={k}>{formatPrecise(l.gradRms[t]!)}</td>
                   ))}

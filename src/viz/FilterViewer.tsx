@@ -1,8 +1,8 @@
 import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
-import type { ConvFilters, ConvLayerSpec } from '../worker';
+import type { ConvFilters, ConvLayerSpec, DeadFlags } from '../worker';
 import { formatPrecise, lutIndex } from './colour';
 import { useHeatmapLut } from './hooks';
-import { type FilterStats, filterStats, kernelOf, rowTitle } from './layerViews';
+import { type FilterStats, deadFlagsOf, filterStats, kernelOf, rowTitle } from './layerViews';
 import { Tooltip } from './Tooltip';
 
 const GAP = 1;
@@ -40,11 +40,14 @@ export function FilterGrid({
   scale,
   selected,
   onSelect,
+  dead = null,
 }: {
   layer: ConvFilters;
   scale: FilterScale;
   selected: Pick | null;
   onSelect(p: Pick | null): void;
+  /** 1 per dead filter (a ReLU channel that is 0 on every gradient image). */
+  dead?: Uint8Array | null;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const lut = useHeatmapLut();
@@ -131,6 +134,19 @@ export function FilterGrid({
             );
           }}
         />
+        {dead &&
+          Array.from(dead).flatMap((d, f) =>
+            d
+              ? [
+                  <div
+                    key={f}
+                    className="tile-dead"
+                    style={box({ filter: f, channel: 0 })}
+                    aria-hidden
+                  />,
+                ]
+              : [],
+          )}
         {selected && selected.filter < outChannels && (
           <div className="weight-selected" style={box(selected)} aria-hidden />
         )}
@@ -140,7 +156,12 @@ export function FilterGrid({
           x={hover.x}
           y={hover.y}
           title={`Filter ${hover.filter + 1}${wrap ? '' : `, input channel ${hover.channel + 1}`}`}
-          rows={statRows(h)}
+          rows={[
+            ...statRows(h),
+            ...(dead?.[hover.filter]
+              ? [['Dead', 'its ReLU output is 0 on every gradient image'] as [string, string]]
+              : []),
+          ]}
         />
       )}
     </div>
@@ -191,9 +212,12 @@ function KernelDetail({ layer, pick }: { layer: ConvFilters; pick: Pick }) {
 export function FilterViewer({
   filters,
   rows,
+  dead = [],
 }: {
   filters: ConvFilters[];
   rows: readonly ConvLayerSpec[];
+  /** Dead flags by parameterised layer; conv layer i is parameterised layer i. */
+  dead?: readonly DeadFlags[];
 }) {
   const [layerIndex, setLayerIndex] = useState(0);
   const [scale, setScale] = useState<FilterScale>('tile');
@@ -206,7 +230,10 @@ export function FilterViewer({
     selected && selected.filter < layer.outChannels && selected.channel < layer.inChannels
       ? selected
       : null;
+  const deadOf = (i: number) => deadFlagsOf(dead, i);
+  const deadCount = (i: number) => deadOf(i)?.reduce((a, d) => a + d, 0) ?? 0;
   const title = (i: number) => rowTitle(rows, filters[i]!.row);
+  const flags = deadOf(li);
 
   return (
     <>
@@ -224,6 +251,7 @@ export function FilterViewer({
                 }}
               >
                 {title(i)}
+                {deadCount(i) > 0 && <span className="dead-count"> · {deadCount(i)} dead</span>}
               </button>
             ))}
           </div>
@@ -261,6 +289,9 @@ export function FilterViewer({
                 <th scope="col">Highest weight</th>
                 <th scope="col">RMS</th>
                 <th scope="col">Bias</th>
+                <th scope="col" title="Its ReLU output is 0 on every gradient image">
+                  Dead
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -271,6 +302,7 @@ export function FilterViewer({
                   <td>{formatPrecise(s.max)}</td>
                   <td>{formatPrecise(s.rms)}</td>
                   <td>{formatPrecise(s.bias)}</td>
+                  <td>{flags?.[f] ? 'yes' : '–'}</td>
                 </tr>
               ))}
             </tbody>
@@ -278,7 +310,13 @@ export function FilterViewer({
         </div>
       ) : (
         <>
-          <FilterGrid layer={layer} scale={scale} selected={sel} onSelect={setSelected} />
+          <FilterGrid
+            layer={layer}
+            scale={scale}
+            selected={sel}
+            onSelect={setSelected}
+            dead={flags}
+          />
           {sel && (
             <div className="weight-detail">
               <KernelDetail layer={layer} pick={sel} />
@@ -298,6 +336,8 @@ export function FilterViewer({
                   {layer.inChannels > 1
                     ? 'Blue weights respond to that channel firing there, orange ones are held back by it.'
                     : 'Blue weights reward ink there, orange ones penalise it.'}
+                  {flags?.[sel.filter] === 1 &&
+                    ' This filter is dead: after its ReLU it outputs 0 for every gradient image, so no gradient reaches these weights and they have stopped changing.'}
                 </p>
                 <button type="button" onClick={() => setSelected(null)}>
                   Close

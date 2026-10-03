@@ -9,6 +9,11 @@ import {
   type DigitPadHandle,
   FeatureMaps,
   FilterViewer,
+  InsideTables,
+  type TimelineAxis,
+  deadFlagsOf,
+  deadText,
+  paramLayerInfo,
   LossCurve,
   PredictionBars,
   WeightImages,
@@ -21,7 +26,14 @@ import {
   topUnits,
   unitStats,
 } from '../viz';
-import { type FirstLayerWeights, type MnistSnapshot, type Speed, TRAIN_EVAL_SIZE } from '../worker';
+import {
+  type FirstLayerWeights,
+  GRAD_EVAL_SIZE,
+  type MnistSnapshot,
+  type Speed,
+  TRAIN_EVAL_SIZE,
+} from '../worker';
+import { InsideTrainingPanel } from './InsidePanel';
 import { HyperparamControls } from './OptimiserControls';
 import { MnistArchitecture } from './MnistArchitecture';
 import { MnistProjectBar } from './MnistProjectBar';
@@ -82,7 +94,15 @@ function MnistControls({
   );
 }
 
-function WeightsPanel({ layer, hidden }: { layer: FirstLayerWeights; hidden?: Float32Array }) {
+function WeightsPanel({
+  layer,
+  hidden,
+  dead,
+}: {
+  layer: FirstLayerWeights;
+  hidden?: Float32Array;
+  dead: Uint8Array | null;
+}) {
   const [scale, setScale] = useState<'tile' | 'shared'>('tile');
   const [asTable, setAsTable] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
@@ -116,6 +136,7 @@ function WeightsPanel({ layer, hidden }: { layer: FirstLayerWeights; hidden?: Fl
                 <th scope="col">Highest weight</th>
                 <th scope="col">RMS</th>
                 <th scope="col">Bias</th>
+                {dead && <th scope="col">Dead</th>}
                 {hidden && <th scope="col">For your digit</th>}
               </tr>
             </thead>
@@ -127,6 +148,7 @@ function WeightsPanel({ layer, hidden }: { layer: FirstLayerWeights; hidden?: Fl
                   <td>{formatPrecise(s.max)}</td>
                   <td>{formatPrecise(s.rms)}</td>
                   <td>{formatPrecise(s.bias)}</td>
+                  {dead && <td>{dead[j] ? 'yes' : '–'}</td>}
                   {hidden && <td>{formatPrecise(hidden[j]!)}</td>}
                 </tr>
               ))}
@@ -171,6 +193,7 @@ function WeightsPanel({ layer, hidden }: { layer: FirstLayerWeights; hidden?: Fl
             unitName={unitName}
             selected={sel}
             onSelect={setSelected}
+            dead={classes ? null : dead}
           />
           {sel !== null && (
             <div className="weight-detail">
@@ -194,8 +217,11 @@ function WeightsPanel({ layer, hidden }: { layer: FirstLayerWeights; hidden?: Fl
         {classes
           ? 'With no hidden layer, each digit’s score is its template’s match with the image.'
           : 'Each tile is one unit’s 784 incoming weights laid out as the image. They start as random noise, and training draws strokes into the middle. Pixels near the edge are almost always blank, so their weights get no gradient and keep the noise: try L2 regularisation 0.001 to clear it.'}{' '}
-        {hidden && !classes ? 'Outlined: the units your digit excites most. ' : ''}Click a tile to
-        enlarge it.
+        {hidden && !classes ? 'Outlined: the units your digit excites most. ' : ''}
+        {dead?.some((d) => d === 1) && !classes
+          ? `Hatched: dead units, whose ReLU outputs 0 for all ${GRAD_EVAL_SIZE} gradient images. `
+          : ''}
+        Click a tile to enlarge it.
       </p>
     </section>
   );
@@ -387,12 +413,52 @@ function ResultsPanels({
   );
 }
 
+/** The Inside training panel for an MNIST run: one column per record, layers named. */
+function MnistInsidePanel({ snapshot }: { snapshot: MnistSnapshot }) {
+  const { recordEvery, trainSize, layerNames, timeline, network, dead, gradEvalSize } = snapshot;
+  const axis = useMemo<TimelineAxis>(
+    () => ({
+      layerName: (k) => layerNames[k] ?? `Layer ${k + 1}`,
+      at: (x) => `epoch ${recordEpoch(x, recordEvery, trainSize)}`,
+      column: 'Epoch',
+      cell: (x) => recordEpoch(x, recordEvery, trainSize),
+    }),
+    [layerNames, recordEvery, trainSize],
+  );
+  const info = useMemo(() => paramLayerInfo(network), [network]);
+  if (timeline.epochs.length === 0) return null;
+  return (
+    <InsideTrainingPanel
+      className="mnist-inside"
+      timeline={timeline}
+      axis={axis}
+      table={
+        <InsideTables
+          timeline={timeline}
+          axis={axis}
+          deadOf={(k) => deadText(info[k]!, deadFlagsOf(dead, k))}
+          deadTitle={`ReLU units or channels of this layer that output 0 for all ${gradEvalSize} gradient images`}
+        />
+      }
+      normsHint={
+        <>
+          Root-mean-square of ∂L/∂W over a fixed {gradEvalSize} training images (including the L2
+          term when L2 is on), measured at every record, on a log scale. Lines far apart mean some
+          layers learn much faster than others; a line falling towards the bottom means that layer
+          has almost stopped learning.
+        </>
+      }
+    />
+  );
+}
+
 /** The MNIST tab: train an MLP on 10,000 handwritten digits and look inside it. */
 export function MnistPage() {
   const worker = useMnistWorker();
   const data = useMnistStore((s) => s.data);
   const snapshot = useMnistStore((s) => s.snapshot);
   const drawn = useMnistStore((s) => s.drawn);
+  const gradTarget = useMnistStore((s) => s.gradTarget);
   const padRef = useRef<DigitPadHandle | null>(null);
   const subset = data.status === 'ready' ? data.subset : null;
 
@@ -423,15 +489,25 @@ export function MnistPage() {
         {snapshot?.filters ? (
           <section className="panel weights-panel">
             <h2>What the filters look for</h2>
-            <FilterViewer filters={snapshot.filters} rows={snapshot.network.conv} />
+            <FilterViewer
+              filters={snapshot.filters}
+              rows={snapshot.network.conv}
+              dead={snapshot.dead}
+            />
             <p className="hint">
               Each tile is one kernel: the weights a filter slides across its input. They start as
               random noise; training turns the first layer’s into small stroke and edge detectors.
               Click a tile to see its numbers.
+              {snapshot.dead.length > 0 &&
+                ` Hatched: dead filters, whose ReLU outputs 0 for all ${snapshot.gradEvalSize} gradient images.`}
             </p>
           </section>
         ) : snapshot?.firstLayer ? (
-          <WeightsPanel layer={snapshot.firstLayer} hidden={snapshot.prediction?.hidden} />
+          <WeightsPanel
+            layer={snapshot.firstLayer}
+            hidden={snapshot.prediction?.hidden}
+            dead={deadFlagsOf(snapshot.dead, 0)}
+          />
         ) : (
           <section className="panel" />
         )}
@@ -450,6 +526,13 @@ export function MnistPage() {
               rows={snapshot.network.conv}
               maps={snapshot.prediction.maps}
               input={drawn}
+              {...(snapshot.prediction.gradMaps && { gradMaps: snapshot.prediction.gradMaps })}
+              {...(snapshot.prediction.inputGrad && { inputGrad: snapshot.prediction.inputGrad })}
+              {...(snapshot.prediction.target !== undefined && {
+                target: snapshot.prediction.target,
+              })}
+              gradTarget={gradTarget}
+              onGradTarget={useMnistStore.getState().setGradTarget}
             />
           ) : (
             <>
@@ -467,6 +550,7 @@ export function MnistPage() {
           <ResultsPanels snapshot={snapshot} test={subset.test} onTry={tryImage} />
         </div>
       )}
+      {snapshot && <MnistInsidePanel snapshot={snapshot} />}
       <p className="credit">
         MNIST by Yann LeCun, Corinna Cortes and Christopher J. C. Burges (CC BY-SA 3.0): 10,000
         training and 2,000 test images, 1,000 and 200 of each digit, are bundled with NeuroViz.

@@ -39,6 +39,8 @@ export interface MnistState {
   drawn: Float32Array | null;
   /** null = the most confidently wrong test images overall. */
   galleryFilter: GalleryFilter | null;
+  /** The class the drawn digit's gradient maps are for; null = the network's answer. */
+  gradTarget: number | null;
 
   setNetwork(network: MnistNetworkSpec): void;
   setTraining(patch: Partial<Hyperparams>): void;
@@ -53,6 +55,7 @@ export interface MnistState {
   loadModel(file: MnistModelFile): void;
   setDrawn(drawn: Float32Array | null): void;
   setGalleryFilter(filter: GalleryFilter | null): void;
+  setGradTarget(target: number | null): void;
 }
 
 export const useMnistStore = create<MnistState>()((set, get) => ({
@@ -65,6 +68,7 @@ export const useMnistStore = create<MnistState>()((set, get) => ({
   resume: null,
   drawn: null,
   galleryFilter: null,
+  gradTarget: null,
 
   // A network that doesn't fit the image is kept (so the builder can show why) but can't run.
   setNetwork: (network) =>
@@ -91,4 +95,5 @@ export const useMnistStore = create<MnistState>()((set, get) => ({
   loadModel: ({ config, checkpoint }) => get().setConfig(config, { resume: checkpoint }),
   setDrawn: (drawn) => set({ drawn }),
   setGalleryFilter: (galleryFilter) => set({ galleryFilter }),
+  setGradTarget: (gradTarget) => set({ gradTarget }),
 }));

@@ -1,4 +1,4 @@
-import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Shape } from '../engine';
 import { type ConvLayerSpec, type FeatureMap, MNIST_IMAGE_SHAPE } from '../worker';
 import { type Normalisation, formatPrecise, lutIndex } from './colour';
@@ -162,27 +162,56 @@ function MapLayer({
 
 const INPUT_NORMALISATION: Normalisation = { scale: 1, offset: 0 };
 
+export type MapView = 'activations' | 'gradients';
+
+/** −g, so blue reads "raise this to be more sure of the target". */
+function descent(g: Float32Array): Float32Array {
+  return g.map((v) => (v === 0 ? 0 : -v));
+}
+
+/** Symmetric scale by the largest |value|. */
+function byMaxAbs(v: Float32Array): Normalisation {
+  let m = 0;
+  for (let i = 0; i < v.length; i++) m = Math.max(m, Math.abs(v[i]!));
+  return { scale: 1 / (m || 1), offset: 0 };
+}
+
 /**
  * What each image layer makes of one input: every channel's feature map, layer
- * by layer. Click a pixel to see its receptive field: the part of the input
- * (and of every layer before it) that it is computed from.
+ * by layer, or (Gradients) how each value should change to make the network
+ * more sure of a chosen digit. Click a pixel to see its receptive field: the
+ * part of the input (and of every layer before it) that it is computed from.
  */
 export function FeatureMaps({
   rows,
   maps,
   input,
+  gradMaps,
+  inputGrad,
+  target,
+  gradTarget = null,
+  onGradTarget,
 }: {
   rows: readonly ConvLayerSpec[];
   maps: FeatureMap[];
   /** The 28×28 input in [0, 1]. */
   input: Float32Array;
+  /** ∂L/∂ each map and ∂L/∂ input, for the loss against `target`. */
+  gradMaps?: FeatureMap[];
+  inputGrad?: Float32Array;
+  target?: number;
+  /** The chosen target (null: the network's answer) and how to change it. */
+  gradTarget?: number | null;
+  onGradTarget?: (t: number | null) => void;
 }) {
   const [asTable, setAsTable] = useState(false);
   const [scale, setScale] = useState<MapScale>('layer');
+  const [view, setView] = useState<MapView>('activations');
   const [pick, setPick] = useState<MapPick | null>(null);
   const [hover, setHover] = useState<
     (MapPick & { px: number; py: number; title: string; value: number }) | null
   >(null);
+  const grads = view === 'gradients' && gradMaps !== undefined && inputGrad !== undefined;
   // A pick only makes sense for the network it was made on.
   const valid = pick && pick.row < maps.length ? pick : null;
 
@@ -193,36 +222,86 @@ export function FeatureMaps({
     return () => window.removeEventListener('keydown', onKey);
   }, [valid]);
 
+  const shown = useMemo(
+    () => (grads && gradMaps ? gradMaps.map((g) => ({ ...g, data: descent(g.data) })) : maps),
+    [grads, gradMaps, maps],
+  );
+  const shownInput = useMemo(
+    () => (grads && inputGrad ? descent(inputGrad) : input),
+    [grads, inputGrad, input],
+  );
   const shapes = useMemo(() => maps.map((m) => m.shape), [maps]);
   const field =
     valid && receptiveField(rows, shapes, MNIST_IMAGE_SHAPE, valid.row, valid.y, valid.x);
   const normalisers = useMemo(
     () =>
-      maps.map((m) => {
-        if (scale === 'map') return (v: Float32Array) => mapNormalisation(rows, m.row, v);
-        const whole = mapNormalisation(rows, m.row, m.data);
+      shown.map((m) => {
+        const norm = (v: Float32Array) => (grads ? byMaxAbs(v) : mapNormalisation(rows, m.row, v));
+        if (scale === 'map') return norm;
+        const whole = norm(m.data);
         return () => whole;
       }),
-    [maps, rows, scale],
+    [shown, rows, scale, grads],
   );
-  const inputNormalise = useMemo(() => () => INPUT_NORMALISATION, []);
+  const inputNorm = useMemo(
+    () => (grads ? byMaxAbs(shownInput) : INPUT_NORMALISATION),
+    [grads, shownInput],
+  );
+  const inputNormalise = useCallback(() => inputNorm, [inputNorm]);
   const stats = useMemo(
-    () => (asTable ? maps.map((m) => channelStats(m.data, m.shape)) : []),
-    [asTable, maps],
+    () => (asTable ? shown.map((m) => channelStats(m.data, m.shape)) : []),
+    [asTable, shown],
   );
 
+  const valueName = grads ? `−∂L/∂ (towards ${target})` : 'Value';
   const valueAt = (m: FeatureMap, ch: number, y: number, x: number) =>
     m.data[(ch * m.shape[1] + y) * m.shape[2] + x]!;
   const describePick = (p: MapPick, f: { input: Rect }) =>
     `${rowTitle(rows, p.row)}, channel ${p.channel + 1}, at row ${p.y}, column ${p.x} ` +
-    `(value ${formatPrecise(valueAt(maps[p.row]!, p.channel, p.y, p.x))}) is computed from input ` +
-    describeRect(f.input);
+    `(${grads ? '−∂L/∂' : 'value'} ${formatPrecise(valueAt(shown[p.row]!, p.channel, p.y, p.x))}) ` +
+    `is computed from input ${describeRect(f.input)}`;
 
   return (
     <>
       <div className="panel-toolbar">
         <h2>Feature maps</h2>
         <div className="weights-options">
+          {gradMaps && (
+            <div className="segmented" role="group" aria-label="Show">
+              <button
+                type="button"
+                aria-pressed={view === 'activations'}
+                onClick={() => setView('activations')}
+              >
+                Activations
+              </button>
+              <button
+                type="button"
+                aria-pressed={view === 'gradients'}
+                onClick={() => setView('gradients')}
+              >
+                Gradients
+              </button>
+            </div>
+          )}
+          {grads && onGradTarget && (
+            <label className="field inline">
+              <span>Gradient for</span>
+              <select
+                value={gradTarget ?? ''}
+                onChange={(e) =>
+                  onGradTarget(e.target.value === '' ? null : Number(e.target.value))
+                }
+              >
+                <option value="">its answer{gradTarget === null ? ` (${target})` : ''}</option>
+                {Array.from({ length: 10 }, (_, d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <div className="segmented" role="group" aria-label="Show maps as">
             <button type="button" aria-pressed={!asTable} onClick={() => setAsTable(false)}>
               Images
@@ -247,6 +326,14 @@ export function FeatureMaps({
           )}
         </div>
       </div>
+      {grads && (
+        <p className="hint">
+          How each value would have to change to make the network more sure this is a {target}:
+          −∂L/∂(value), with L the loss for “{target}” on this one image. Blue: raise it; orange:
+          lower it. On the input, blue is where more ink would make it look more like a {target} (a
+          saliency map).
+        </p>
+      )}
       {asTable ? (
         <div className="table-scroll">
           <table className="data-table">
@@ -254,8 +341,8 @@ export function FeatureMaps({
               <tr>
                 <th scope="col">Layer</th>
                 <th scope="col">Channel</th>
-                <th scope="col">Mean</th>
-                <th scope="col">Max</th>
+                <th scope="col">Mean{grads ? ' −∂L/∂' : ''}</th>
+                <th scope="col">Max{grads ? ' −∂L/∂' : ''}</th>
                 <th scope="col">Zero</th>
               </tr>
             </thead>
@@ -263,7 +350,7 @@ export function FeatureMaps({
               {stats.flatMap((layer, i) =>
                 layer.map((s, ch) => (
                   <tr key={`${i}.${ch}`}>
-                    <th scope="row">{ch === 0 ? rowTitle(rows, maps[i]!.row) : ''}</th>
+                    <th scope="row">{ch === 0 ? rowTitle(rows, shown[i]!.row) : ''}</th>
                     <td>{ch + 1}</td>
                     <td>{formatPrecise(s.mean)}</td>
                     <td>{formatPrecise(s.max)}</td>
@@ -291,9 +378,9 @@ export function FeatureMaps({
           </p>
           <div className="feature-maps">
             <MapLayer
-              title="Input"
+              title={grads ? 'Input (saliency)' : 'Input'}
               shape={MNIST_IMAGE_SHAPE}
-              data={input}
+              data={shownInput}
               normalise={inputNormalise}
               field={field ? field.input : null}
               picked={null}
@@ -303,12 +390,12 @@ export function FeatureMaps({
                     ...hv,
                     row: -1,
                     title: 'Input',
-                    value: input[hv.y * 28 + hv.x]!,
+                    value: shownInput[hv.y * 28 + hv.x]!,
                   },
                 )
               }
             />
-            {maps.map((m, i) => (
+            {shown.map((m, i) => (
               <MapLayer
                 key={i}
                 title={rowTitle(rows, m.row)}
@@ -346,7 +433,7 @@ export function FeatureMaps({
           title={hover.title}
           rows={[
             ['Position', `row ${hover.y}, column ${hover.x}`],
-            ['Value', formatPrecise(hover.value)],
+            [valueName, formatPrecise(hover.value)],
           ]}
         />
       )}

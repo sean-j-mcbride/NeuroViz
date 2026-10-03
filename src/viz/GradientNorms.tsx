@@ -3,7 +3,7 @@ import type { TimelineSnapshot } from '../worker';
 import { cssVar, formatPow10, prepareCanvas } from './canvas';
 import { depthColour, formatPrecise } from './colour';
 import { useElementWidth, usePrefersDark } from './hooks';
-import { layerLabel } from './labels';
+import { EPOCH_AXIS, type TimelineAxis, capitalise } from './labels';
 import { Tooltip } from './Tooltip';
 
 const HEIGHT = 200;
@@ -11,6 +11,7 @@ const PAD = { left: 44, right: 10, top: 8, bottom: 20 };
 
 interface GradientNormsProps {
   timeline: TimelineSnapshot;
+  axis?: TimelineAxis;
 }
 
 /** Decade range [lo, hi] (as exponents) covering every positive value. */
@@ -59,6 +60,7 @@ function draw(
   geo: Geometry,
   dark: boolean,
   hoverT: number | null,
+  axis: TimelineAxis,
 ): void {
   const { width, lo, hi, lastEpoch, xOf, yOf } = geo;
   const ctx = prepareCanvas(canvas, width, HEIGHT);
@@ -86,7 +88,7 @@ function draw(
   ctx.textAlign = 'left';
   ctx.fillText('0', PAD.left, HEIGHT - PAD.bottom + 5);
   ctx.textAlign = 'right';
-  ctx.fillText(`epoch ${lastEpoch}`, width - PAD.right, HEIGHT - PAD.bottom + 5);
+  ctx.fillText(axis.at(lastEpoch), width - PAD.right, HEIGHT - PAD.bottom + 5);
 
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
@@ -129,7 +131,7 @@ function draw(
  * Gradient size (RMS of ∂L/∂W over the training set) per dense layer over the
  * run, on a log axis. Early layers are lighter, later layers darker.
  */
-export function GradientNorms({ timeline }: GradientNormsProps) {
+export function GradientNorms({ timeline, axis = EPOCH_AXIS }: GradientNormsProps) {
   const wrap = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLCanvasElement>(null);
   const width = useElementWidth(wrap);
@@ -141,8 +143,8 @@ export function GradientNorms({ timeline }: GradientNormsProps) {
   const hoverT = hover?.t ?? null;
 
   useEffect(() => {
-    if (ref.current && width > 0) draw(ref.current, timeline, geo, dark, hoverT);
-  }, [timeline, geo, width, dark, hoverT]);
+    if (ref.current && width > 0) draw(ref.current, timeline, geo, dark, hoverT, axis);
+  }, [timeline, geo, width, dark, hoverT, axis]);
 
   const onMove = (e: MouseEvent<HTMLCanvasElement>) => {
     if (n === 0) return;
@@ -170,9 +172,9 @@ export function GradientNorms({ timeline }: GradientNormsProps) {
         <Tooltip
           x={hover.x}
           y={hover.y}
-          title={`Epoch ${epochs[hover.t]}`}
+          title={capitalise(axis.at(epochs[hover.t]!))}
           rows={layers.map((l, k) => [
-            layerLabel(k, layers.length),
+            axis.layerName(k, layers.length),
             formatPrecise(l.gradRms[hover.t]!),
           ])}
         />

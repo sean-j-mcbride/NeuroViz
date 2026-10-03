@@ -18,6 +18,7 @@ function createClient(): TrainingClient<MnistTask> {
     {
       now: () => performance.now(),
       drawn: () => useMnistStore.getState().drawn,
+      gradTarget: () => useMnistStore.getState().gradTarget,
     },
   );
 }
@@ -55,6 +56,7 @@ export function useMnistWorker(): {
   const running = useMnistStore((s) => s.running);
   const speed = useMnistStore((s) => s.speed);
   const drawn = useMnistStore((s) => s.drawn);
+  const gradTarget = useMnistStore((s) => s.gradTarget);
   const subset = data.status === 'ready' ? data.subset : null;
 
   const client = useMemo(() => createClient(), []);
@@ -85,10 +87,10 @@ export function useMnistWorker(): {
     if (subset) client.setHyperparams(training, useMnistStore.getState().running);
   }, [client, subset, training]);
 
-  // A new drawing needs a snapshot carrying its prediction.
+  // A new drawing (or gradient target) needs a snapshot carrying its prediction.
   useEffect(() => {
     if (subset) client.requestSnapshot();
-  }, [client, subset, drawn]);
+  }, [client, subset, drawn, gradTarget]);
 
   useEffect(() => {
     if (!running || !subset) return;

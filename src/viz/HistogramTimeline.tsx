@@ -14,6 +14,8 @@ interface HistogramTimelineProps {
   epochs: Float32Array;
   bins: BinSpec;
   label: string;
+  /** "epoch 12" for a column's x value (default: the epoch itself). */
+  at?: (x: number) => string;
 }
 
 /**
@@ -21,7 +23,13 @@ interface HistogramTimelineProps {
  * of the layer's weights in that bin. The square root of the fraction is shown so
  * thin tails stay visible.
  */
-export function HistogramTimeline({ hist, epochs, bins, label }: HistogramTimelineProps) {
+export function HistogramTimeline({
+  hist,
+  epochs,
+  bins,
+  label,
+  at = (x) => `epoch ${x}`,
+}: HistogramTimelineProps) {
   const wrap = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLCanvasElement>(null);
   const width = useElementWidth(wrap);
@@ -136,7 +144,7 @@ export function HistogramTimeline({ hist, epochs, bins, label }: HistogramTimeli
         <Tooltip
           x={hover.x}
           y={hover.y}
-          title={`${label} · epoch ${epochs[hover.t]}`}
+          title={`${label} · ${at(epochs[hover.t]!)}`}
           rows={[
             ['Range', binRange(hover.b)],
             ['Share of weights', `${((hist[hover.t * B + hover.b] ?? 0) * 100).toFixed(1)} %`],
